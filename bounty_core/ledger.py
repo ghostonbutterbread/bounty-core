@@ -912,19 +912,29 @@ def patch_finding_by_fid(
     family: str | None = None,
     root_override: str | Path | None = None,
     storage_root: str | Path | None = None,
+    write_report: bool = False,
+    refresh: bool = False,
+    update_current: bool = False,
+    update_sighting: bool = False,
 ) -> dict[str, Any] | None:
-    """Patch one finding by FID without touching observation metadata or side artifacts."""
+    """Patch one finding by FID without touching observation metadata by default."""
     target = str(fid or "").strip()
     if not target:
         raise ValueError("fid is required")
 
+    root = _normalize_root_override(root_override, storage_root)
+    layout = (
+        resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
+        if write_report or refresh
+        else None
+    )
     normalized_patch = {
         key: value
         for key, value in _normalize_patch(patch).items()
         if key not in _FID_PATCH_PROTECTED_FIELDS
     }
 
-    with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
+    with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root) as payload:
         findings = payload.setdefault("findings", [])
         if not isinstance(findings, list):
             findings = []
@@ -935,8 +945,53 @@ def patch_finding_by_fid(
                 continue
             if str(finding.get("fid") or "").strip() != target:
                 continue
+            old_report_path = Path(str(finding.get("report_path"))).expanduser() if finding.get("report_path") else None
             finding.update(normalized_patch)
             finding["fid"] = target
+            if layout is not None:
+                finding.setdefault("identity", _core_identity(layout.program, layout.family, layout.lane, target))
+                finding.setdefault("harness_fid", target)
+                finding.setdefault("program", layout.program)
+                finding.setdefault("family", layout.family)
+                finding.setdefault("lane", layout.lane)
+                finding.setdefault("title", str(finding.get("type") or "Unknown finding").strip())
+                finding.setdefault("asset", str(finding.get("file") or finding.get("url") or finding.get("endpoint") or "unknown").strip())
+                finding.setdefault("source_tool", str(finding.get("agent") or "bug-bounty-harness").strip())
+                if not str(finding.get("status") or "").strip():
+                    finding["status"] = _core_status_for(finding)
+            if update_current:
+                current = finding.get("current")
+                if not isinstance(current, dict):
+                    current = {}
+                else:
+                    current = dict(current)
+                review_tier = str(finding.get("review_tier") or finding.get("tier") or "").strip()
+                if review_tier:
+                    current["review_tier"] = review_tier
+                status = str(finding.get("status") or "").strip()
+                if status:
+                    current["status"] = status
+                finding["current"] = current
+            if update_sighting:
+                sightings = finding.get("sightings")
+                if isinstance(sightings, list):
+                    latest = next((item for item in reversed(sightings) if isinstance(item, dict)), None)
+                    if latest is not None:
+                        review_tier = str(finding.get("review_tier") or finding.get("tier") or "").strip()
+                        if review_tier:
+                            latest["review_tier"] = review_tier
+                        status = str(finding.get("status") or "").strip()
+                        if status:
+                            latest["status"] = status
+                        finding["current"] = _current_from_sightings([item for item in sightings if isinstance(item, dict)])
+            if write_report and layout is not None:
+                report_path = write_finding_report(layout, finding)
+                report_path.write_text(render_finding_report(finding), encoding="utf-8")
+                finding["report_path"] = str(report_path)
+                _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+            if refresh and layout is not None:
+                refresh_indexes(layout, findings)
+                refresh_report_indexes(layout, findings)
             return dict(finding)
     return None
 

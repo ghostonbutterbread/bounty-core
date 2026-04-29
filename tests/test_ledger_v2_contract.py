@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -213,6 +214,41 @@ def test_patch_finding_by_fid_preserves_observation_metadata_without_side_effect
     assert jsonl_path.read_text(encoding="utf-8") == original_jsonl
     assert not layout.reports_root.exists()
     assert not (layout.ledgers_root / "indexes").exists()
+
+
+def test_patch_finding_by_fid_can_refresh_reports_and_indexes_when_requested(tmp_path):
+    path = ledger_path("mobile", family="binaries", lane="apk", root_override=tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_payload(), indent=2) + "\n", encoding="utf-8")
+    layout = resolve_storage("mobile", family="binaries", lane="apk", root_override=tmp_path)
+
+    patched = patch_finding_by_fid(
+        "mobile",
+        "D01",
+        {
+            "review_tier": "CONFIRMED",
+            "tier": "CONFIRMED",
+            "status": "confirmed",
+            "review_notes": "Confirmed by reviewer.",
+        },
+        family="binaries",
+        lane="apk",
+        root_override=tmp_path,
+        write_report=True,
+        refresh=True,
+        update_current=True,
+    )
+
+    assert patched is not None
+    written = json.loads(path.read_text(encoding="utf-8"))
+    finding = written["findings"][0]
+    assert len(written["findings"]) == 1
+    assert finding["fid"] == "D01"
+    assert finding["current"]["review_tier"] == "CONFIRMED"
+    assert finding["current"]["status"] == "confirmed"
+    assert Path(finding["report_path"]).exists()
+    assert (layout.ledgers_root / "indexes" / "by_status" / "confirmed.json").exists()
+    assert "IPC trust boundary" in (layout.reports_root / "index" / "confirmed.md").read_text(encoding="utf-8")
 
 
 def test_old_add_finding_api_uses_v2_identity_for_source_style_findings(tmp_path):
