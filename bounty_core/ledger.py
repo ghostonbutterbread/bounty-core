@@ -996,6 +996,56 @@ def patch_finding_by_fid(
     return None
 
 
+def update_coverage_state(
+    program: str,
+    *,
+    agent_name: str,
+    surface: str,
+    finding_count: int,
+    lane: str = "apk",
+    family: str | None = None,
+    root_override: str | Path | None = None,
+    storage_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Update top-level coverage support metadata without changing findings."""
+    with _locked_payload(
+        program,
+        exclusive=True,
+        lane=lane,
+        family=family,
+        root_override=root_override,
+        storage_root=storage_root,
+    ) as payload:
+        coverage = payload.setdefault("coverage", {})
+        if not isinstance(coverage, dict):
+            coverage = {}
+            payload["coverage"] = coverage
+
+        agents_run = coverage.setdefault("agents_run", {})
+        if not isinstance(agents_run, dict):
+            agents_run = {}
+            coverage["agents_run"] = agents_run
+        agents_run[str(agent_name)] = _timestamp_iso()
+
+        surfaces_tested = coverage.setdefault("surfaces_tested", [])
+        if not isinstance(surfaces_tested, list):
+            surfaces_tested = []
+            coverage["surfaces_tested"] = surfaces_tested
+        normalized_surface = str(surface or "").strip()
+        if normalized_surface and normalized_surface not in surfaces_tested:
+            surfaces_tested.append(normalized_surface)
+        coverage["surfaces_tested"] = sorted(str(item).strip() for item in surfaces_tested if str(item).strip())
+
+        findings = payload.get("findings")
+        finding_total = len(findings) if isinstance(findings, list) else 0
+        coverage["total_findings"] = max(
+            _safe_int(coverage.get("total_findings")),
+            finding_total,
+            max(0, int(finding_count)),
+        )
+        return dict(coverage)
+
+
 def ledger_sightings(
     program: str,
     fid: str,
@@ -1615,5 +1665,6 @@ __all__ = [
     "migrate_ledger_payload",
     "migrate_legacy_finding",
     "patch_finding_by_fid",
+    "update_coverage_state",
     "update_finding",
 ]
