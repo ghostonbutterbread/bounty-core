@@ -1,7 +1,13 @@
 """Shared bug bounty storage, ledger, report, and index helpers."""
 
 from .finding import normalize_finding
-from .ledger import add_finding, get_finding, list_findings, update_finding
+from .ledger import (
+    add_finding,
+    get_finding,
+    list_findings,
+    patch_finding_by_fid,
+    update_finding,
+)
 from .recon import ReconRun, start_run, write_manifest
 from .storage import StorageLayout, resolve_family_lane, resolve_storage
 
@@ -12,6 +18,7 @@ __all__ = [
     "get_finding",
     "list_findings",
     "normalize_finding",
+    "patch_finding_by_fid",
     "resolve_family_lane",
     "resolve_storage",
     "start_run",

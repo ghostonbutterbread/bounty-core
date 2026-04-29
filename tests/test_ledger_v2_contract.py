@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bounty_core import add_finding, update_finding
+from bounty_core import add_finding, patch_finding_by_fid, resolve_storage, update_finding
 from bounty_core.ledger import VersionedFindingsLedger, ledger_add, ledger_get, ledger_list, ledger_path
 
 
@@ -165,6 +165,54 @@ def test_core_v2_write_preserves_current_status_when_update_has_no_status(tmp_pa
     assert finding["current"]["review_tier"] == "pending-review"
     assert finding["sightings"][-1]["status"] == "needs-review"
     assert finding["sightings"][-1]["review_tier"] == "pending-review"
+
+
+def test_patch_finding_by_fid_preserves_observation_metadata_without_side_effects(tmp_path):
+    path = ledger_path("mobile", family="binaries", lane="apk", root_override=tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_payload(), indent=2) + "\n", encoding="utf-8")
+    layout = resolve_storage("mobile", family="binaries", lane="apk", root_override=tmp_path)
+    jsonl_path = layout.ledgers_root / "findings.jsonl"
+    jsonl_path.write_text(json.dumps({"existing": True}) + "\n", encoding="utf-8")
+    original_jsonl = jsonl_path.read_text(encoding="utf-8")
+
+    patched = patch_finding_by_fid(
+        "mobile",
+        "D01",
+        {
+            "title": "Corrected IPC finding",
+            "file": "src/corrected.js",
+            "line": 7,
+            "severity": "CRITICAL",
+            "first_snapshot": "bad-snap",
+            "last_snapshot": "bad-snap",
+            "sighting_count": 0,
+            "sightings": [],
+            "current": {"status": "bad"},
+            "snapshot_id": "bad-snap",
+            "version_label": "bad-version",
+            "run_id": "bad-run",
+        },
+        family="binaries",
+        lane="apk",
+        root_override=tmp_path,
+    )
+
+    assert patched is not None
+    written = json.loads(path.read_text(encoding="utf-8"))
+    finding = written["findings"][0]
+    assert finding["title"] == "Corrected IPC finding"
+    assert finding["file"] == "src/corrected.js"
+    assert finding["line"] == 7
+    assert finding["severity"] == "CRITICAL"
+    assert finding["first_snapshot"] == "snap-a"
+    assert finding["last_snapshot"] == "snap-a"
+    assert finding["sighting_count"] == 99
+    assert finding["sightings"] == _payload()["findings"][0]["sightings"]
+    assert finding["current"] == _payload()["findings"][0]["current"]
+    assert jsonl_path.read_text(encoding="utf-8") == original_jsonl
+    assert not layout.reports_root.exists()
+    assert not (layout.ledgers_root / "indexes").exists()
 
 
 def test_old_add_finding_api_uses_v2_identity_for_source_style_findings(tmp_path):

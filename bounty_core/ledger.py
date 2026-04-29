@@ -669,7 +669,14 @@ def _reserve_candidate(
     root_override: str | Path | None = None,
     storage_root: str | Path | None = None,
 ) -> tuple[bool, str]:
-    with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
+    with _locked_payload(
+        program,
+        exclusive=True,
+        lane=lane,
+        family=family,
+        root_override=root_override,
+        storage_root=storage_root,
+    ) as payload:
         findings = payload.setdefault("findings", [])
         if not isinstance(findings, list):
             findings = []
@@ -878,6 +885,59 @@ def ledger_get(
             if str(finding.get("fid") or "").strip() != target:
                 continue
             return _normalize_entry(finding)
+    return None
+
+
+_FID_PATCH_PROTECTED_FIELDS = {
+    "fid",
+    "first_seen",
+    "first_snapshot",
+    "last_seen",
+    "last_snapshot",
+    "sightings",
+    "sighting_count",
+    "current",
+    "snapshot_id",
+    "version_label",
+    "run_id",
+}
+
+
+def patch_finding_by_fid(
+    program: str,
+    fid: str,
+    patch: dict[str, Any],
+    *,
+    lane: str = "apk",
+    family: str | None = None,
+    root_override: str | Path | None = None,
+    storage_root: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Patch one finding by FID without touching observation metadata or side artifacts."""
+    target = str(fid or "").strip()
+    if not target:
+        raise ValueError("fid is required")
+
+    normalized_patch = {
+        key: value
+        for key, value in _normalize_patch(patch).items()
+        if key not in _FID_PATCH_PROTECTED_FIELDS
+    }
+
+    with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
+        findings = payload.setdefault("findings", [])
+        if not isinstance(findings, list):
+            findings = []
+            payload["findings"] = findings
+
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            if str(finding.get("fid") or "").strip() != target:
+                continue
+            finding.update(normalized_patch)
+            finding["fid"] = target
+            return dict(finding)
     return None
 
 
@@ -1499,5 +1559,6 @@ __all__ = [
     "list_findings",
     "migrate_ledger_payload",
     "migrate_legacy_finding",
+    "patch_finding_by_fid",
     "update_finding",
 ]
