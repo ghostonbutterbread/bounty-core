@@ -62,6 +62,21 @@ COVERAGE_EVENTS = {
     # Backward-compatible event from the initial draft examples.
     "agent_completed",
 }
+APPMAP_COVERAGE_TERMINAL_COVERED_EVENTS = {
+    "agent_completed_no_finding",
+    "review_promoted",
+    "agent_duplicate_only",
+}
+APPMAP_COVERAGE_TERMINAL_UNCOVERED_EVENTS = {
+    "agent_completed_with_raw_findings",
+    "agent_timeout",
+    "agent_crashed",
+    "agent_invalid_output",
+    "review_rejected",
+}
+APPMAP_COVERAGE_TERMINAL_EVENTS = (
+    APPMAP_COVERAGE_TERMINAL_COVERED_EVENTS | APPMAP_COVERAGE_TERMINAL_UNCOVERED_EVENTS
+)
 MAX_SUGGESTED_AGENT_KEY_LENGTH = 64
 
 _SECTION_RE = re.compile(r"^(#{2})\s+(.+?)\s*$")
@@ -314,6 +329,149 @@ def append_coverage(path: str | Path, event: dict[str, Any]) -> None:
         handle.flush()
 
 
+def read_coverage_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    """Return valid JSON object coverage rows, tolerating missing/bad files."""
+    return [
+        event
+        for event in _iter_coverage_events(path, include_invalid=False)
+        if isinstance(event, dict)
+    ]
+
+
+def normalized_coverage_path_value(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if _URL_SCHEME_RE.match(raw):
+        return raw
+    return str(Path(raw).expanduser().resolve(strict=False))
+
+
+def normalized_assignment_identity(
+    metadata: dict[str, Any],
+    *,
+    default_agent_key: str | None = None,
+    require_snapshot: bool = True,
+) -> dict[str, str] | None:
+    """Return the shared coverage identity for one brainstorm assignment."""
+    if not isinstance(metadata, dict):
+        return None
+    hypothesis_id = str(metadata.get("hypothesis_id") or "").strip()
+    agent_key = str(
+        metadata.get("brainstorm_agent_key")
+        or metadata.get("agent_key")
+        or default_agent_key
+        or ""
+    ).strip()
+    source_spec_path = normalized_coverage_path_value(
+        metadata.get("source_spec_path") or metadata.get("brainstorm_spec")
+    )
+    if not hypothesis_id or not agent_key or not source_spec_path:
+        return None
+
+    snapshot_id = str(metadata.get("_snapshot_id") or metadata.get("snapshot_id") or "").strip()
+    snapshot_version = str(
+        metadata.get("_snapshot_version")
+        or metadata.get("snapshot_version")
+        or metadata.get("version_label")
+        or metadata.get("app_version")
+        or ""
+    ).strip()
+    if require_snapshot and not snapshot_id and not snapshot_version:
+        return None
+
+    return {
+        "source_spec_path": source_spec_path,
+        "hypothesis_id": hypothesis_id,
+        "agent_key": agent_key,
+        "candidate_id": _appmap_candidate_identity_value(metadata),
+        "appmap_context_packet": normalized_coverage_path_value(metadata.get("appmap_context_packet")),
+        "appmap_run_id": str(metadata.get("appmap_run_id") or "").strip(),
+        "snapshot_id": snapshot_id,
+        "snapshot_version": snapshot_version,
+    }
+
+
+def appmap_assignment_identity(
+    metadata: dict[str, Any],
+    *,
+    default_agent_key: str | None = None,
+    require_snapshot: bool = True,
+) -> dict[str, str] | None:
+    identity = normalized_assignment_identity(
+        metadata,
+        default_agent_key=default_agent_key,
+        require_snapshot=require_snapshot,
+    )
+    if identity is None:
+        return None
+    if not identity.get("candidate_id") and not identity.get("appmap_context_packet"):
+        return None
+    return identity
+
+
+def coverage_event_matches_assignment(event: dict[str, Any], identity: dict[str, str]) -> bool:
+    if not isinstance(event, dict) or not isinstance(identity, dict):
+        return False
+    if str(event.get("hypothesis_id") or "").strip() != identity.get("hypothesis_id", ""):
+        return False
+    if str(event.get("agent_key") or "").strip() != identity.get("agent_key", ""):
+        return False
+    if (
+        normalized_coverage_path_value(event.get("source_spec_path") or event.get("brainstorm_spec"))
+        != identity.get("source_spec_path", "")
+    ):
+        return False
+
+    candidate_id = identity.get("candidate_id") or ""
+    if candidate_id and _appmap_candidate_identity_value(event) != candidate_id:
+        return False
+
+    context_packet = identity.get("appmap_context_packet") or ""
+    if (
+        not candidate_id
+        and context_packet
+        and normalized_coverage_path_value(event.get("appmap_context_packet")) != context_packet
+    ):
+        return False
+
+    snapshot_id = identity.get("snapshot_id") or ""
+    event_snapshot_id = str(event.get("snapshot_id") or "").strip()
+    if snapshot_id and event_snapshot_id != snapshot_id:
+        return False
+
+    snapshot_version = identity.get("snapshot_version") or ""
+    event_snapshot_version = str(
+        event.get("snapshot_version") or event.get("version_label") or event.get("app_version") or ""
+    ).strip()
+    if not snapshot_id and snapshot_version and event_snapshot_version != snapshot_version:
+        return False
+
+    appmap_run_id = identity.get("appmap_run_id") or ""
+    event_appmap_run_id = str(event.get("appmap_run_id") or "").strip()
+    if appmap_run_id and event_appmap_run_id != appmap_run_id:
+        return False
+    return True
+
+
+def is_appmap_assignment_covered(
+    identity: dict[str, str] | None,
+    events: list[dict[str, Any]] | Iterator[dict[str, Any]],
+) -> bool:
+    """Return true only when the latest matching terminal AppMap event is covered."""
+    if identity is None:
+        return False
+    latest_terminal_event = ""
+    for event in events:
+        event_type = str(event.get("event") or "").strip()
+        if event_type not in APPMAP_COVERAGE_TERMINAL_EVENTS:
+            continue
+        if not coverage_event_matches_assignment(event, identity):
+            continue
+        latest_terminal_event = event_type
+    return latest_terminal_event in APPMAP_COVERAGE_TERMINAL_COVERED_EVENTS
+
+
 def summarize_coverage(
     path: str | Path,
     *,
@@ -328,7 +486,7 @@ def summarize_coverage(
             )
 
     invalid_lines = 0
-    for event in _read_coverage_events(path):
+    for event in _iter_coverage_events(path, include_invalid=True):
         if event.get("_invalid_json"):
             invalid_lines += 1
             continue
@@ -809,22 +967,30 @@ def _locked_append_handle(path: Path) -> Iterator[Any]:
         handle.close()
 
 
-def _read_coverage_events(path: str | Path) -> Iterator[dict[str, Any]]:
+def _iter_coverage_events(path: str | Path, *, include_invalid: bool) -> Iterator[dict[str, Any]]:
     coverage_path = Path(path).expanduser().resolve(strict=False)
     if not coverage_path.exists():
         return
-    with coverage_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                event = json.loads(stripped)
-            except json.JSONDecodeError:
-                yield {"event": "__invalid_json__", "_invalid_json": True}
-                continue
-            if isinstance(event, dict):
-                yield event
+    try:
+        with coverage_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    if include_invalid:
+                        yield {"event": "__invalid_json__", "_invalid_json": True}
+                    continue
+                if isinstance(event, dict):
+                    yield event
+    except OSError:
+        return
+
+
+def _appmap_candidate_identity_value(payload: dict[str, Any]) -> str:
+    return str(payload.get("candidate_id") or payload.get("appmap_candidate_id") or "").strip()
 
 
 def _new_hypothesis_summary(status: str = "untested", title: str = "") -> dict[str, Any]:

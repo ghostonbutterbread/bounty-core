@@ -7,8 +7,12 @@ import pytest
 
 from bounty_core.brainstorm_spec import (
     BrainstormSpecError,
+    appmap_assignment_identity,
     append_coverage,
+    coverage_event_matches_assignment,
+    is_appmap_assignment_covered,
     parse_brainstorm_spec,
+    read_coverage_jsonl,
     spec_to_agent_intents,
     summarize_coverage,
 )
@@ -465,3 +469,130 @@ def test_coverage_rejects_agent_scoped_status_changes(tmp_path: Path) -> None:
                 "status": "retired",
             },
         )
+
+
+def _appmap_identity_metadata(tmp_path: Path, **overrides: str) -> dict[str, str]:
+    metadata = {
+        "hypothesis_id": "H001",
+        "brainstorm_agent_key": "agent-a",
+        "source_spec_path": str(tmp_path / "brainstorm" / "spec.md"),
+        "appmap_candidate_id": "C0001",
+        "appmap_context_packet": str(tmp_path / "brainstorm" / "agent_contexts" / "H001-C0001-agent-a.json"),
+        "appmap_run_id": "run-a",
+        "_snapshot_id": "snap-a",
+        "_snapshot_version": "1.0.0",
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def _matching_coverage_event(identity: dict[str, str], event: str, **overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "event": event,
+        "hypothesis_id": identity["hypothesis_id"],
+        "agent_key": identity["agent_key"],
+        "source_spec_path": identity["source_spec_path"],
+        "appmap_candidate_id": identity["candidate_id"],
+        "appmap_context_packet": identity["appmap_context_packet"],
+        "appmap_run_id": identity["appmap_run_id"],
+        "snapshot_id": identity["snapshot_id"],
+        "snapshot_version": identity["snapshot_version"],
+    }
+    row.update(overrides)
+    return row
+
+
+def test_appmap_assignment_identity_requires_candidate_or_context_packet(tmp_path: Path) -> None:
+    tag_only = _appmap_identity_metadata(
+        tmp_path,
+        appmap_candidate_id="",
+        appmap_context_packet="",
+    )
+    tag_only["brainstorm_tags"] = "appmap"
+
+    assert appmap_assignment_identity(tag_only) is None
+
+    with_packet = appmap_assignment_identity(
+        _appmap_identity_metadata(tmp_path, appmap_candidate_id="")
+    )
+    assert with_packet is not None
+    assert with_packet["candidate_id"] == ""
+    assert with_packet["appmap_context_packet"].endswith("H001-C0001-agent-a.json")
+
+
+def test_appmap_assignment_coverage_uses_latest_terminal_semantics(tmp_path: Path) -> None:
+    identity = appmap_assignment_identity(_appmap_identity_metadata(tmp_path))
+    assert identity is not None
+
+    queued = _matching_coverage_event(identity, "agent_queued")
+    spawned = _matching_coverage_event(identity, "agent_spawned")
+    covered = _matching_coverage_event(identity, "agent_completed_no_finding")
+    promoted = _matching_coverage_event(identity, "review_promoted")
+    raw_only = _matching_coverage_event(identity, "agent_completed_with_raw_findings")
+    timeout = _matching_coverage_event(identity, "agent_timeout")
+
+    assert not is_appmap_assignment_covered(identity, [queued, spawned])
+    assert is_appmap_assignment_covered(identity, [queued, covered])
+    assert is_appmap_assignment_covered(identity, [raw_only, promoted])
+    assert not is_appmap_assignment_covered(identity, [raw_only])
+    assert not is_appmap_assignment_covered(identity, [covered, raw_only])
+    assert not is_appmap_assignment_covered(identity, [covered, timeout])
+    assert is_appmap_assignment_covered(identity, [timeout, covered])
+
+
+def test_appmap_assignment_matching_is_strict_for_run_snapshot_and_context(tmp_path: Path) -> None:
+    identity = appmap_assignment_identity(_appmap_identity_metadata(tmp_path))
+    assert identity is not None
+
+    assert coverage_event_matches_assignment(
+        _matching_coverage_event(identity, "agent_completed_no_finding"),
+        identity,
+    )
+    assert not coverage_event_matches_assignment(
+        _matching_coverage_event(identity, "agent_completed_no_finding", appmap_run_id=""),
+        identity,
+    )
+    assert not coverage_event_matches_assignment(
+        _matching_coverage_event(identity, "agent_completed_no_finding", appmap_run_id="run-b"),
+        identity,
+    )
+    assert not coverage_event_matches_assignment(
+        _matching_coverage_event(identity, "agent_completed_no_finding", snapshot_id="snap-b"),
+        identity,
+    )
+
+    packet_only = appmap_assignment_identity(
+        _appmap_identity_metadata(tmp_path, appmap_candidate_id="")
+    )
+    assert packet_only is not None
+    assert not coverage_event_matches_assignment(
+        _matching_coverage_event(
+            packet_only,
+            "agent_completed_no_finding",
+            appmap_context_packet=str(tmp_path / "other.json"),
+        ),
+        packet_only,
+    )
+
+
+def test_read_coverage_jsonl_tolerates_missing_invalid_and_non_object_rows(tmp_path: Path) -> None:
+    coverage_path = tmp_path / "brainstorm" / "coverage.jsonl"
+    assert read_coverage_jsonl(coverage_path) == []
+
+    coverage_path.parent.mkdir(parents=True)
+    coverage_path.write_text(
+        "\n".join(
+            [
+                '{"event":"agent_queued","hypothesis_id":"H001","agent_key":"agent-a"}',
+                "not json",
+                '["not", "object"]',
+                '{"event":"agent_spawned","hypothesis_id":"H001","agent_key":"agent-a"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert [row["event"] for row in read_coverage_jsonl(coverage_path)] == [
+        "agent_queued",
+        "agent_spawned",
+    ]
