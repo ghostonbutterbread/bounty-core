@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from bounty_core import add_finding, resolve_storage
+from bounty_core.reports import refresh_report_indexes
 
 
 def test_storage_ledger_report_indexes(tmp_path):
@@ -33,6 +34,18 @@ def test_storage_ledger_report_indexes(tmp_path):
     assert (layout.ledgers_root / "indexes" / "active_slice.json").exists()
     assert (layout.reports_root / "raw" / "fuzz" / "index.md").exists()
     assert (layout.reports_root / "index" / "fuzz.md").exists()
+
+
+def test_refresh_report_indexes_does_not_rewrite_dated_report_buckets(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    dated_index = layout.reports_root / "novel" / "05-05-2026" / "index.md"
+    dated_index.parent.mkdir(parents=True)
+    dated_index.write_text("# Novel Findings\n\nNo reviewed novel findings.\n", encoding="utf-8")
+
+    refresh_report_indexes(layout, [])
+
+    assert dated_index.read_text(encoding="utf-8") == "# Novel Findings\n\nNo reviewed novel findings.\n"
+    assert not (layout.reports_root / "novel" / "05-05-2026" / "index.md").read_text(encoding="utf-8").startswith("# Novel 05-05-2026")
 
 
 def test_duplicate_updates_existing_identity(tmp_path):

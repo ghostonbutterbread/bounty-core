@@ -20,6 +20,7 @@ DEFAULT_LANES: dict[str, set[str]] = {
 REPORT_STATES = ("raw", "confirmed", "dormant", "novel", "complete", "archive")
 NOTE_BUCKETS = ("faq", "hypotheses", "handoffs", "timeline")
 VULN_TYPES = ("xss", "sqli", "ssrf", "idor", "auth", "bac", "fuzz", "recon", "chain")
+REPORT_NAV_GENERATED_MARKER = "<!-- generated: bounty-core-report-navigation -->"
 
 
 @dataclass(slots=True)
@@ -148,7 +149,10 @@ def build_me_context(layout: StorageLayout) -> str:
         "",
         "Canonical write rules:",
         f"- Write raw reports to: {layout.reports_root / 'raw'}",
-        f"- Promote reviewed findings to: {layout.reports_root}/{{confirmed,dormant,novel,complete,archive}}",
+        f"- Write editable finding reports to: {layout.reports_root / 'findings'}",
+        f"- Write daily navigation under: {layout.reports_root / 'daily'}",
+        f"- Write category navigation under: {layout.reports_root / 'categories'}",
+        f"- Write severity navigation under: {layout.reports_root / 'severity'}",
         f"- Write summary indexes under: {layout.reports_root / 'index'}",
         f"- Use ledger root: {layout.ledgers_root}",
         f"- Use context root: {layout.context_root}",
@@ -226,6 +230,10 @@ def ensure_layout(layout: StorageLayout) -> None:
         layout.program_root,
         layout.lane_root,
         layout.reports_root,
+        layout.reports_root / "findings",
+        layout.reports_root / "daily",
+        layout.reports_root / "categories",
+        layout.reports_root / "severity",
         layout.ledgers_root,
         layout.working_root,
         layout.context_root,
@@ -240,13 +248,13 @@ def ensure_layout(layout: StorageLayout) -> None:
             (layout.reports_root / state / vuln_type).mkdir(parents=True, exist_ok=True)
             index_path = layout.reports_root / state / vuln_type / "index.md"
             if not index_path.exists():
-                index_path.write_text(f"# {state.title()} {vuln_type.upper()}\n\n", encoding="utf-8")
+                index_path.write_text(f"{REPORT_NAV_GENERATED_MARKER}\n# {state.title()} {vuln_type.upper()}\n\n", encoding="utf-8")
 
     (layout.reports_root / "index").mkdir(parents=True, exist_ok=True)
     for index_name in [*REPORT_STATES, *VULN_TYPES]:
         index_path = layout.reports_root / "index" / f"{index_name}.md"
         if not index_path.exists():
-            index_path.write_text(f"# {index_name.replace('_', ' ').title()}\n\n", encoding="utf-8")
+            index_path.write_text(f"{REPORT_NAV_GENERATED_MARKER}\n# {index_name.replace('_', ' ').title()}\n\n", encoding="utf-8")
 
     for path in [
         layout.ledgers_root / "archive",

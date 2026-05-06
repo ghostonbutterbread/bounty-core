@@ -327,6 +327,46 @@ def test_old_update_finding_api_preserves_custom_status_values(tmp_path):
     assert updated["finding"]["review_tier"] == "pending-review"
 
 
+def test_update_finding_preserves_hand_edited_canonical_report(tmp_path):
+    added = add_finding(
+        {
+            "program": "mobile",
+            "family": "binaries",
+            "lane": "apk",
+            "type": "IPC trust boundary",
+            "class_name": "ipc-trust-boundary",
+            "file": "src/preload.js",
+            "line": 44,
+            "severity": "HIGH",
+            "status": "dormant",
+        },
+        root_override=tmp_path,
+        write_report=True,
+        refresh=True,
+    )
+    finding = added["finding"]
+    report_path = Path(finding["report_path"])
+    report_path.write_text(report_path.read_text(encoding="utf-8") + "\nManual reviewer note.\n", encoding="utf-8")
+
+    updated = update_finding(
+        finding["identity"],
+        {"title": "Updated title from ledger", "status": "confirmed"},
+        "mobile",
+        "binaries",
+        "apk",
+        root_override=tmp_path,
+        refresh=True,
+    )
+
+    assert updated["ok"] is True
+    moved_path = Path(updated["finding"]["report_path"])
+    assert moved_path != report_path
+    assert not report_path.exists()
+    text = moved_path.read_text(encoding="utf-8")
+    assert "Manual reviewer note." in text
+    assert "Updated title from ledger" not in text
+
+
 def test_versioned_ledger_fingerprint_matches_source_style_identity_policy(tmp_path):
     ledger = VersionedFindingsLedger(
         "mobile",

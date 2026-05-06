@@ -18,7 +18,14 @@ from typing import Any, Iterator
 
 from .finding import VALID_STATUSES, normalize_finding, normalize_severity, slugify, utc_now
 from .indexes import refresh_indexes
-from .reports import refresh_report_indexes, render_finding_report, write_finding_report
+from .reports import (
+    CATEGORY_STUB_GENERATED_MARKER,
+    FINDING_REPORT_GENERATED_MARKER,
+    REPORT_NAV_GENERATED_MARKER,
+    is_generated_safe_finding_report,
+    refresh_report_indexes,
+    write_finding_report,
+)
 from .storage import DEFAULT_LANES, VALID_FAMILIES, StorageLayout, normalize_family, normalize_lane, resolve_storage
 
 
@@ -986,7 +993,6 @@ def patch_finding_by_fid(
                         finding["current"] = _current_from_sightings([item for item in sightings if isinstance(item, dict)])
             if write_report and layout is not None:
                 report_path = write_finding_report(layout, finding)
-                report_path.write_text(render_finding_report(finding), encoding="utf-8")
                 finding["report_path"] = str(report_path)
                 _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
             if refresh and layout is not None:
@@ -1370,7 +1376,13 @@ def _delete_report_if_under_reports_root(layout: StorageLayout, path: Path | Non
     if not candidate.is_relative_to(reports_root):
         return
     if candidate.exists() and candidate.is_file():
-        candidate.unlink()
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        if (
+            REPORT_NAV_GENERATED_MARKER in text
+            or CATEGORY_STUB_GENERATED_MARKER in text
+            or (FINDING_REPORT_GENERATED_MARKER in text and is_generated_safe_finding_report(candidate))
+        ):
+            candidate.unlink()
 
 
 def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
@@ -1479,7 +1491,6 @@ def _add_source_style_finding(
 
         if write_report:
             report_path = write_finding_report(layout, stored)
-            report_path.write_text(render_finding_report(stored), encoding="utf-8")
             stored["report_path"] = str(report_path)
             _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
@@ -1545,7 +1556,6 @@ def add_finding(
 
         if write_report:
             report_path = write_finding_report(layout, stored)
-            report_path.write_text(render_finding_report(stored), encoding="utf-8")
             stored["report_path"] = str(report_path)
             _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
@@ -1626,7 +1636,6 @@ def update_finding(
         finding["updated_at"] = now
 
         report_path = write_finding_report(layout, finding)
-        report_path.write_text(render_finding_report(finding), encoding="utf-8")
         finding["report_path"] = str(report_path)
         _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
