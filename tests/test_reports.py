@@ -10,12 +10,13 @@ from bounty_core.reports import (
     DAILY_REPORT_DATE_FORMAT,
     FINDING_REPORT_GENERATED_MARKER,
     REPORT_NAV_GENERATED_MARKER,
+    canonical_report_wikilink,
     canonical_finding_report_path,
     category_report_slug,
     is_generated_safe_finding_report,
+    obsidian_report_link,
     refresh_report_navigation_from_ledger,
     refresh_report_indexes,
-    relative_markdown_link,
     render_finding_report,
     safe_symlink_or_link_stub,
     write_finding_report,
@@ -116,7 +117,8 @@ def test_refresh_report_indexes_writes_daily_month_first_link_views(tmp_path):
     assert "|---|" not in dormant
     assert "D01%20-%20HIGH" not in dormant
     assert "<../../findings/dormant" not in dormant
-    assert "../../findings/dormant/D01 - HIGH - Renderer bridge requires prior XSS.md" in dormant
+    assert "../../findings/dormant/D01 - HIGH - Renderer bridge requires prior XSS.md" not in dormant
+    assert "[[D01 - HIGH - Renderer bridge requires prior XSS|D01]]" in dormant
     assert "Full vulnerability body text that must stay out of navigation." not in dormant
     assert not (layout.reports_root / "dormant" / "06-13-2026").exists()
 
@@ -356,8 +358,8 @@ def test_refresh_report_indexes_removes_stale_generated_daily_views_after_move(t
     assert manual_note.read_text(encoding="utf-8") == "# Manual daily note\n\nKeep this.\n"
     new_text = new_confirmed.read_text(encoding="utf-8")
     assert "M01" in new_text
-    assert "Moved daily issue.md" in new_text
-    assert "Original daily issue.md" not in new_text
+    assert "[[M01 - HIGH - Moved daily issue|M01]]" in new_text
+    assert "Original daily issue" not in new_text
 
 
 def test_refresh_report_indexes_removes_empty_generated_category_index_after_category_change(tmp_path):
@@ -453,13 +455,21 @@ def test_refresh_report_navigation_from_ledger_preserves_hand_edited_finding_rep
     payload = json.loads((layout.ledgers_root / "ledger.json").read_text(encoding="utf-8"))
     assert payload["findings"][0]["report_path"] == str(moved_path)
     daily_confirmed = next((layout.reports_root / "daily").glob("*/confirmed.md"))
-    assert "../../findings/confirmed/D01 - HIGH - Ledger refresh title.md" in daily_confirmed.read_text(encoding="utf-8")
+    assert "[[D01 - HIGH - Ledger refresh title|D01]]" in daily_confirmed.read_text(encoding="utf-8")
 
 
-def test_relative_markdown_link_uses_obsidian_friendly_relative_path(tmp_path):
+def test_obsidian_report_link_uses_wikilink_relative_target_without_markdown_suffix(tmp_path):
     index_path = tmp_path / "reports" / "index.md"
+    target = tmp_path / "reports" / "daily" / "06-13-2026" / "active.md"
+
+    link = obsidian_report_link(index_path, target, "Active")
+
+    assert link == "[[daily/06-13-2026/active|Active]]"
+
+
+def test_canonical_report_wikilink_uses_file_stem_and_escapes_label(tmp_path):
     target = tmp_path / "reports" / "findings" / "active" / "D01 - HIGH - title ) # [tag].md"
 
-    link = relative_markdown_link(index_path, target, "D[01]")
+    link = canonical_report_wikilink(target, "D[01]|x]")
 
-    assert link == r"[D\[01\]](findings/active/D01 - HIGH - title \) # [tag].md)"
+    assert link == r"[[D01 - HIGH - title ) # [tag\]|D[01\]\|x\]]]"

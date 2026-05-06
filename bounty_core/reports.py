@@ -194,14 +194,32 @@ def daily_report_paths(layout: StorageLayout, date_value: date | datetime | str 
     return paths
 
 
-def relative_markdown_link(from_path: Path, to_path: Path, label: str) -> str:
+def obsidian_report_link(from_path: Path, to_path: Path, label: str) -> str:
     rel = _relative_path(from_path.parent, to_path)
-    # Obsidian resolves normal relative markdown paths with spaces. URL-style
-    # percent encoding plus angle-bracket destinations can be interpreted as a
-    # literal new note path, so keep generated report navigation filesystem-like.
     destination = rel.as_posix().replace("\\", "/")
-    destination = destination.replace("(", "\\(").replace(")", "\\)")
-    return f"[{_escape_link_text(str(label))}]({destination})"
+    if destination.endswith(".md"):
+        destination = destination[:-3]
+    return obsidian_wikilink(destination, label)
+
+
+def canonical_report_wikilink(to_path: Path, label: str) -> str:
+    return obsidian_wikilink(to_path.stem, label)
+
+
+def obsidian_wikilink(target: str, label: str) -> str:
+    return f"[[{_escape_wikilink_part(target)}|{_escape_wikilink_label(label)}]]"
+
+
+def relative_markdown_link(from_path: Path, to_path: Path, label: str) -> str:
+    return obsidian_report_link(from_path, to_path, label)
+
+
+def _escape_wikilink_part(value: Any) -> str:
+    return str(value or "").strip().replace("|", "\\|").replace("]", "\\]")
+
+
+def _escape_wikilink_label(value: Any) -> str:
+    return _short(value, 140).replace("|", "\\|").replace("]", "\\]")
 
 
 def _relative_path(from_dir: Path, to_path: Path) -> Path:
@@ -260,7 +278,7 @@ def safe_symlink_or_link_stub(link_path: Path, target_path: Path, *, reports_roo
                 CATEGORY_STUB_GENERATED_MARKER,
                 f"# {target_path.stem}",
                 "",
-                f"Canonical finding: {relative_markdown_link(link_path, target_path, target_path.stem)}",
+                f"Canonical finding: {canonical_report_wikilink(target_path, target_path.stem)}",
                 "",
             ]
         )
@@ -556,7 +574,7 @@ def _canonical_link_for(index_path: Path, finding: dict[str, Any]) -> str:
     reports_root = _reports_root_for(index_path) or index_path.parent
     target = _report_path_for_navigation(reports_root, finding)
     label = str(finding.get("fid") or finding.get("harness_fid") or _title_for(finding)).strip()
-    return relative_markdown_link(index_path, target, label)
+    return canonical_report_wikilink(target, label)
 
 
 def _report_path_for_navigation(reports_root: Path, finding: dict[str, Any]) -> Path:
@@ -828,11 +846,11 @@ def write_daily_report_views(
         "",
         "## Views",
         "",
-        f"- {relative_markdown_link(paths['index'], paths['active'], 'Active')}",
-        f"- {relative_markdown_link(paths['index'], paths['confirmed'], 'Confirmed')}",
-        f"- {relative_markdown_link(paths['index'], paths['dormant'], 'Dormant')}",
-        f"- {relative_markdown_link(paths['index'], paths['novel'], 'Novel')}",
-        f"- {relative_markdown_link(paths['index'], paths['completed'], 'Completed')}",
+        f"- {obsidian_report_link(paths['index'], paths['active'], 'Active')}",
+        f"- {obsidian_report_link(paths['index'], paths['confirmed'], 'Confirmed')}",
+        f"- {obsidian_report_link(paths['index'], paths['dormant'], 'Dormant')}",
+        f"- {obsidian_report_link(paths['index'], paths['novel'], 'Novel')}",
+        f"- {obsidian_report_link(paths['index'], paths['completed'], 'Completed')}",
         "",
         "## Findings",
         "",
@@ -845,7 +863,7 @@ def write_daily_report_views(
     if category_slugs:
         for slug in category_slugs:
             category_index = layout.reports_root / CATEGORIES_DIRNAME / slug / "index.md"
-            index_lines.append(f"- {relative_markdown_link(paths['index'], category_index, slug)}")
+            index_lines.append(f"- {obsidian_report_link(paths['index'], category_index, slug)}")
     else:
         index_lines.append("- None")
     written: dict[str, Path] = {"root": paths["root"]}

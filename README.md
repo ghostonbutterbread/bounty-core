@@ -56,4 +56,4 @@ confirmed > active > dormant > completed
 
 It then chooses by severity priority and finally by natural FID order.
 
-Generated markdown links are Obsidian-friendly relative paths. They keep spaces in filenames and avoid percent-encoded angle-bracket link destinations.
+Generated navigation uses Obsidian wikilinks for internal report links. Canonical finding links use the target report file stem, such as `[[D54 - MEDIUM - Unauthenticated recording blob read via custom protocol token enumeration|D54]]`, so they do not depend on absolute path prefixes or vault-root-relative path choices.
