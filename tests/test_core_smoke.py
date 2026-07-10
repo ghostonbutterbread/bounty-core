@@ -77,3 +77,57 @@ def test_custom_lane_requires_explicit_family(tmp_path):
 
     assert layout.family == "web_bounty"
     assert layout.lane == "custom"
+
+
+@pytest.mark.parametrize(
+    "root_suffix",
+    [
+        ("Shared", "web_bounty"),
+        ("web_bounty", "acme"),
+        ("web_bounty", "acme", "web"),
+        ("web_bounty", "acme", "web", "recon"),
+        ("web_bounty", "acme", "web", "recon", "maps"),
+    ],
+)
+def test_root_override_accepts_canonical_subroots(tmp_path, root_suffix):
+    supplied_root = tmp_path.joinpath(*root_suffix)
+    expected_base = tmp_path / "Shared" if root_suffix[:1] == ("Shared",) else tmp_path
+
+    layout = resolve_storage(
+        "acme",
+        family="web_bounty",
+        lane="web",
+        root_override=supplied_root,
+    )
+
+    assert layout.base_root == expected_base
+    assert layout.lane_root == expected_base / "web_bounty" / "acme" / "web"
+    assert "web_bounty/web_bounty" not in layout.lane_root.as_posix()
+
+
+def test_root_override_preserves_ambiguous_base_named_like_family(tmp_path):
+    base_root = tmp_path / "web_bounty"
+
+    layout = resolve_storage(
+        "acme",
+        family="web_bounty",
+        lane="web",
+        root_override=base_root,
+    )
+
+    assert layout.base_root == base_root
+    assert layout.lane_root == base_root / "web_bounty" / "acme" / "web"
+
+
+def test_root_override_accepts_binary_canonical_subroots(tmp_path):
+    supplied_root = tmp_path / "binaries" / "mobile" / "apk" / "recon" / "maps"
+
+    layout = resolve_storage(
+        "mobile",
+        family="binaries",
+        lane="apk",
+        root_override=supplied_root,
+    )
+
+    assert layout.base_root == tmp_path
+    assert layout.lane_root == tmp_path / "binaries" / "mobile" / "apk"

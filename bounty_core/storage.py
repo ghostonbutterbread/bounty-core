@@ -195,7 +195,12 @@ def resolve_storage(
         family_root = base_root / normalized_family
         program_root = family_root / normalized_program
     else:
-        base_root = Path(root_override).expanduser().resolve(strict=False)
+        base_root = _canonical_base_root_from_override(
+            Path(root_override).expanduser().resolve(strict=False),
+            family=normalized_family,
+            program=normalized_program,
+            lane=normalized_lane,
+        )
         root_mode = "explicit-local"
         family_root = base_root / normalized_family
         program_root = family_root / normalized_program
@@ -223,6 +228,36 @@ def resolve_storage(
     if create:
         ensure_layout(layout)
     return layout
+
+
+def _canonical_base_root_from_override(
+    root: Path,
+    *,
+    family: str,
+    program: str,
+    lane: str,
+) -> Path:
+    """Accept common canonical sub-roots while preserving base-root semantics.
+
+    ``root_override`` historically means the shared base directory, such as
+    ``~/Shared``. In practice agents often pass a family, program, lane, recon,
+    or MapStore root. Normalising those known canonical depths prevents silent
+    duplicate paths like ``~/Shared/web_bounty/web_bounty/<program>/<lane>``.
+    """
+    parts = root.parts
+    canonical_suffixes = [
+        (family, program, lane, "recon", "maps"),
+        (family, program, lane, "recon", "map"),
+        (family, program, lane, "recon"),
+        (family, program, lane),
+        (family, program),
+    ]
+    for suffix in canonical_suffixes:
+        if len(parts) >= len(suffix) and parts[-len(suffix):] == suffix:
+            return Path(*parts[: -len(suffix)])
+    if root.name == family and root.parent.name == "Shared":
+        return root.parent
+    return root
 
 
 def ensure_layout(layout: StorageLayout) -> None:
