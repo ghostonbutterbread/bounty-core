@@ -36,8 +36,8 @@ class HypothesisLedger:
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         now: Callable[[], float] | None = None,
     ) -> None:
-        if ttl_seconds <= 0:
-            raise ValueError("ttl_seconds must be positive")
+        if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be a positive integer")
         self.program = normalize_program(program)
         self.family = normalize_family(family)
         self.lane = normalize_lane(lane)
@@ -96,9 +96,18 @@ class HypothesisLedger:
         with self._connection() as conn:
             self._init(conn)
             conn.execute("BEGIN IMMEDIATE")
+            if parent_id:
+                parent = self._row(conn, parent_id)
+                if parent is None:
+                    raise KeyError(f"parent hypothesis not found: {parent_id}")
+                parent_item = _row_payload(parent)
+                if (
+                    parent_item["owner_agent_id"] != agent_id
+                    or parent_item["owner_run_id"] != run_id
+                    or not self._owner_live(conn, agent_id, run_id, timestamp)
+                ):
+                    raise PermissionError("only a live parent owner may create a child hypothesis")
             self._heartbeat(conn, agent_id, run_id, timestamp)
-            if parent_id and self._row(conn, parent_id) is None:
-                raise KeyError(f"parent hypothesis not found: {parent_id}")
             conn.execute(
                 """
                 INSERT INTO hypotheses(
@@ -139,6 +148,7 @@ class HypothesisLedger:
         timestamp = self._now()
         required_tags = set(_tags(tags))
         normalized_url = normalize_url(url or "")
+        has_recovery_scope = bool(normalized_url or surface or required_tags)
         requested_statuses = {_status(item) for item in statuses} if statuses is not None else UNRESOLVED_STATUSES
         with self._connection() as conn:
             self._init(conn)
@@ -148,7 +158,11 @@ class HypothesisLedger:
                 item = _row_payload(row)
                 owner_live = self._owner_live(conn, item["owner_agent_id"], item["owner_run_id"], timestamp)
                 is_owner = item["owner_agent_id"] == agent_id and item["owner_run_id"] == run_id
-                if not is_owner and owner_live:
+                if not is_owner and (
+                    owner_live
+                    or item["status"] not in UNRESOLVED_STATUSES
+                    or not has_recovery_scope
+                ):
                     continue
                 if normalized_url and item["url"] != normalized_url:
                     continue
@@ -247,6 +261,8 @@ class HypothesisLedger:
             item = _row_payload(row)
             if item["owner_agent_id"] != agent_id or item["owner_run_id"] != run_id:
                 raise PermissionError("only the current owner may complete a hypothesis")
+            if not self._owner_live(conn, agent_id, run_id, timestamp):
+                raise PermissionError("stale owners cannot complete; reclaim the hypothesis first")
             conn.execute("UPDATE hypotheses SET status=?, updated_at=?, completed_at=? WHERE id=?", (terminal_status, timestamp, timestamp, hypothesis_id))
             self._event(conn, "completed", hypothesis_id, agent_id, run_id, timestamp, status=terminal_status)
             conn.commit()

@@ -26,7 +26,7 @@ def test_creator_private_hypotheses_are_hidden_until_owner_stales(tmp_path):
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
 
     now[0] += 2 * 60 * 60 + 1
-    reclaimable = ledger.list_visible(agent_id="agent-b", run_id="run-b")
+    reclaimable = ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")
     assert [item["id"] for item in reclaimable] == [created["id"]]
     assert reclaimable[0]["visibility"] == "reclaimable"
     assert reclaimable[0]["url"] == "https://app.example/export?a=1&b=2"
@@ -123,6 +123,52 @@ def test_owner_can_delegate_a_private_branch_without_exposing_it_to_unrelated_ag
     assert ledger.list_visible(agent_id="agent-a", run_id="run-a") == []
     assert [item["id"] for item in ledger.list_visible(agent_id="child-a", run_id="child-run")] == [created["id"]]
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
+
+
+def test_non_owner_cannot_discover_stale_terminal_hypotheses_even_with_terminal_status_filter(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    created = ledger.create(agent_id="agent-a", run_id="run-a", title="Finished export path", surface="export", tags=["pdf"])
+    ledger.complete(created["id"], agent_id="agent-a", run_id="run-a")
+    now[0] += 11
+
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export", statuses=["completed"]) == []
+
+
+def test_stale_owner_cannot_complete_a_reclaimable_hypothesis(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    created = ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"])
+    now[0] += 11
+
+    import pytest
+    with pytest.raises(PermissionError, match="stale owners"):
+        ledger.complete(created["id"], agent_id="agent-a", run_id="run-a")
+
+
+def test_child_creation_requires_live_ownership_of_the_parent(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    parent = ledger.create(agent_id="agent-a", run_id="run-a", title="Parent", surface="export", tags=["pdf"])
+
+    import pytest
+    with pytest.raises(PermissionError, match="only a live parent owner"):
+        ledger.create(agent_id="agent-b", run_id="run-b", title="Unauthorized child", surface="export", tags=["worker"], parent_id=parent["id"])
+
+
+def test_non_owner_recovery_requires_an_explicit_scope_filter(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"])
+    now[0] += 11
+
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
+    assert len(ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")) == 1
+
+
+def test_fractional_ttl_is_rejected(tmp_path):
+    import pytest
+    with pytest.raises(ValueError, match="positive integer"):
+        HypothesisLedger("demo", root_override=tmp_path, ttl_seconds=0.5)
 
 
 def test_completion_checkpoint_reports_private_counts_without_injecting_hypothesis_content(tmp_path):
