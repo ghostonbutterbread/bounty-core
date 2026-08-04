@@ -200,3 +200,13 @@ def test_completion_checkpoint_reports_private_counts_without_injecting_hypothes
     checkpoint = ledger.continuation_state(agent_id="agent-a", run_id="run-a", surface="export")
 
     assert checkpoint == {"private_unresolved_count": 2, "active_count": 0, "surface": "export"}
+
+
+def test_fresh_owner_can_mark_one_private_hypothesis_active(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    item = ledger.create(agent_id="agent-a", run_id="run-a", title="First", surface="export", tags=[])
+
+    activated = ledger.transition(item["id"], agent_id="agent-a", run_id="run-a", status="active")
+
+    assert activated["status"] == "active"
+    assert ledger.continuation_state(agent_id="agent-a", run_id="run-a", surface="export")["active_count"] == 1

@@ -249,6 +249,34 @@ class HypothesisLedger:
             updated = _row_payload(updated_row)
         return self._with_visibility(updated, viewer_agent_id=child_agent_id, viewer_run_id=child_run_id, timestamp=timestamp, owner_live=True)
 
+    def transition(self, hypothesis_id: str, *, agent_id: str, run_id: str, status: str) -> dict[str, Any]:
+        """Move a current owner's private hypothesis among unresolved states."""
+        unresolved_status = _status(status)
+        if unresolved_status not in UNRESOLVED_STATUSES:
+            raise ValueError("transition requires an unresolved status; use complete for terminal statuses")
+        timestamp = self._now()
+        with self._connection() as conn:
+            self._init(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._row(conn, hypothesis_id)
+            if row is None:
+                raise KeyError(f"hypothesis not found: {hypothesis_id}")
+            item = _row_payload(row)
+            if item["owner_agent_id"] != agent_id or item["owner_run_id"] != run_id:
+                raise PermissionError("only the current owner may transition a hypothesis")
+            if not self._owner_live(conn, agent_id, run_id, timestamp):
+                raise PermissionError("stale owners cannot transition; reclaim the hypothesis first")
+            conn.execute(
+                "UPDATE hypotheses SET status=?, updated_at=? WHERE id=?",
+                (unresolved_status, timestamp, hypothesis_id),
+            )
+            self._event(conn, "transitioned", hypothesis_id, agent_id, run_id, timestamp, status=unresolved_status)
+            conn.commit()
+            updated_row = self._row(conn, hypothesis_id)
+            assert updated_row is not None
+            updated = _row_payload(updated_row)
+        return self._with_visibility(updated, viewer_agent_id=agent_id, viewer_run_id=run_id, timestamp=timestamp, owner_live=True)
+
     def complete(self, hypothesis_id: str, *, agent_id: str, run_id: str, status: str = "completed") -> dict[str, Any]:
         terminal_status = _status(status)
         if terminal_status not in TERMINAL_STATUSES:
