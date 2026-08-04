@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 from bounty_core.hypothesis_ledger import HypothesisLedger
 
 
@@ -169,6 +171,25 @@ def test_fractional_ttl_is_rejected(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="positive integer"):
         HypothesisLedger("demo", root_override=tmp_path, ttl_seconds=0.5)
+
+
+def test_legacy_hypothesis_heartbeats_migrate_to_the_core_namespace(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: 2_000.0)
+    ledger.root.mkdir(parents=True)
+    with sqlite3.connect(ledger.db_path) as conn:
+        conn.execute(
+            "CREATE TABLE agent_heartbeats (agent_id TEXT, run_id TEXT, heartbeat_at REAL, expires_at REAL)"
+        )
+        conn.execute("INSERT INTO agent_heartbeats VALUES (?, ?, ?, ?)", ("agent-a", "run-a", 1_000.0, 9_999.0))
+
+    ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")
+
+    with sqlite3.connect(ledger.db_path) as conn:
+        row = conn.execute(
+            "SELECT namespace, subject_id, run_id, expires_at FROM core_heartbeats"
+        ).fetchone()
+        assert row == ("hypothesis-owner", "agent-a", "run-a", 9_999.0)
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_heartbeats'").fetchone() is None
 
 
 def test_completion_checkpoint_reports_private_counts_without_injecting_hypothesis_content(tmp_path):

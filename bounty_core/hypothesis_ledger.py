@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .heartbeats import ensure_heartbeat_schema, heartbeat_is_live, renew_heartbeat
 from .storage import normalize_family, normalize_lane, normalize_program, resolve_storage
 
 DEFAULT_TTL_SECONDS = 2 * 60 * 60
+HEARTBEAT_NAMESPACE = "hypothesis-owner"
 UNRESOLVED_STATUSES = {"candidate", "active", "queued", "blocked", "deferred"}
 TERMINAL_STATUSES = {"completed", "disproved", "retired", "combined"}
 VALID_STATUSES = UNRESOLVED_STATUSES | TERMINAL_STATUSES
@@ -281,13 +283,6 @@ class HypothesisLedger:
         conn.executescript(
             """
             PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS agent_heartbeats (
-                agent_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                heartbeat_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                PRIMARY KEY(agent_id, run_id)
-            );
             CREATE TABLE IF NOT EXISTS hypotheses (
                 id TEXT PRIMARY KEY,
                 parent_id TEXT REFERENCES hypotheses(id),
@@ -318,18 +313,48 @@ class HypothesisLedger:
             );
             """
         )
+        ensure_heartbeat_schema(conn)
+        self._migrate_legacy_heartbeats(conn)
+
+    @staticmethod
+    def _migrate_legacy_heartbeats(conn: sqlite3.Connection) -> None:
+        legacy = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_heartbeats'"
+        ).fetchone()
+        if legacy is None:
+            return
+        rows = conn.execute(
+            "SELECT agent_id, run_id, heartbeat_at, expires_at FROM agent_heartbeats"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """INSERT INTO core_heartbeats(namespace, subject_id, run_id, heartbeat_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(namespace, subject_id, run_id) DO UPDATE SET
+                     heartbeat_at=MAX(core_heartbeats.heartbeat_at, excluded.heartbeat_at),
+                     expires_at=MAX(core_heartbeats.expires_at, excluded.expires_at)""",
+                (HEARTBEAT_NAMESPACE, row[0], row[1], row[2], row[3]),
+            )
+        conn.execute("DROP TABLE agent_heartbeats")
 
     def _heartbeat(self, conn: sqlite3.Connection, agent_id: str, run_id: str, timestamp: float) -> None:
-        conn.execute(
-            """INSERT INTO agent_heartbeats(agent_id, run_id, heartbeat_at, expires_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(agent_id, run_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at, expires_at=excluded.expires_at""",
-            (_required(agent_id, "agent_id"), _required(run_id, "run_id"), timestamp, timestamp + self.ttl_seconds),
+        renew_heartbeat(
+            conn,
+            namespace=HEARTBEAT_NAMESPACE,
+            subject_id=agent_id,
+            run_id=run_id,
+            ttl_seconds=self.ttl_seconds,
+            now=timestamp,
         )
 
     def _owner_live(self, conn: sqlite3.Connection, agent_id: str, run_id: str, timestamp: float) -> bool:
-        row = conn.execute("SELECT expires_at FROM agent_heartbeats WHERE agent_id=? AND run_id=?", (agent_id, run_id)).fetchone()
-        return row is not None and float(row["expires_at"]) > timestamp
+        return heartbeat_is_live(
+            conn,
+            namespace=HEARTBEAT_NAMESPACE,
+            subject_id=agent_id,
+            run_id=run_id,
+            now=timestamp,
+        )
 
     @staticmethod
     def _row(conn: sqlite3.Connection, hypothesis_id: str) -> sqlite3.Row | None:
