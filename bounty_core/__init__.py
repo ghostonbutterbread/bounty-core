@@ -1,5 +1,6 @@
 """Shared bug bounty storage, ledger, report, and index helpers."""
 
+from .evidence import append_event, read_events, redact_event_value, utc_timestamp, validate_event
 from .finding import normalize_finding
 from .ledger import (
     add_finding,
@@ -14,14 +15,19 @@ from .storage import StorageLayout, resolve_family_lane, resolve_storage
 __all__ = [
     "ReconRun",
     "StorageLayout",
+    "append_event",
     "add_finding",
     "get_finding",
     "list_findings",
     "normalize_finding",
     "patch_finding_by_fid",
+    "read_events",
+    "redact_event_value",
     "resolve_family_lane",
     "resolve_storage",
     "start_run",
     "update_finding",
+    "utc_timestamp",
+    "validate_event",
     "write_manifest",
 ]
