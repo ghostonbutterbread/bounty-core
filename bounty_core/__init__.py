@@ -10,6 +10,7 @@ from .ledger import (
     update_finding,
 )
 from .recon import ReconRun, start_run, write_manifest
+from .reports import canonical_finalized_report_path, canonical_finding_report_dir, canonical_finding_report_path, finalize_finding_report
 from .storage import StorageLayout, resolve_family_lane, resolve_storage
 
 __all__ = [
@@ -17,6 +18,10 @@ __all__ = [
     "StorageLayout",
     "append_event",
     "add_finding",
+    "canonical_finalized_report_path",
+    "canonical_finding_report_dir",
+    "canonical_finding_report_path",
+    "finalize_finding_report",
     "get_finding",
     "list_findings",
     "normalize_finding",

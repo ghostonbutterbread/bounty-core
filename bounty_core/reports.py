@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -17,7 +18,12 @@ REPORT_NAV_GENERATED_MARKER = "<!-- generated: bounty-core-report-navigation -->
 CATEGORY_STUB_GENERATED_MARKER = "<!-- generated: bounty-core-category-link-stub -->"
 FINDING_REPORT_GENERATED_MARKER = "<!-- generated: bounty-core-finding-report -->"
 FINDING_REPORT_CHECKSUM_RE = re.compile(r"^<!-- generated-checksum: sha256:([0-9a-f]{64}) -->$")
-FINDINGS_DIRNAME = "findings"
+LEGACY_FINDINGS_DIRNAME = "findings"
+REPORT_FILENAME = "REPORT.md"
+FINALIZED_REPORT_FILENAME = "FINALIZED.md"
+POC_DIRNAME = "poc"
+EVIDENCE_DIRNAME = "evidence"
+META_DIRNAME = "_meta"
 DAILY_DIRNAME = "daily"
 CATEGORIES_DIRNAME = "categories"
 SEVERITY_DIRNAME = "severity"
@@ -152,12 +158,25 @@ def category_report_slug(finding: dict[str, Any]) -> str:
     return slugify(_category_label_for(finding), default="other")
 
 
+def canonical_finding_report_dir(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Return the immutable packet directory for one finding.
+
+    Lifecycle and severity are intentionally projections, not directory names:
+    a status transition must never invalidate a ledger pointer.
+    """
+    return layout.reports_root / _safe_fid_for(finding)
+
+
 def canonical_finding_report_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
-    return _canonical_finding_report_path_for_reports_root(layout.reports_root, finding)
+    return canonical_finding_report_dir(layout, finding) / REPORT_FILENAME
+
+
+def canonical_finalized_report_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    return canonical_finding_report_dir(layout, finding) / FINALIZED_REPORT_FILENAME
 
 
 def _canonical_finding_report_path_for_reports_root(reports_root: Path, finding: dict[str, Any]) -> Path:
-    return reports_root / FINDINGS_DIRNAME / lifecycle_for_finding(finding) / report_filename(finding)
+    return reports_root / _safe_fid_for(finding) / REPORT_FILENAME
 
 
 def severity_report_index_path(layout: StorageLayout, severity: str) -> Path:
@@ -423,7 +442,7 @@ def _same_path(left: Path, right: Path) -> bool:
 
 def _cleanup_stale_canonical_reports(layout: StorageLayout, finding: dict[str, Any], keep_path: Path) -> None:
     fid = _safe_fid_for(finding)
-    findings_root = layout.reports_root / FINDINGS_DIRNAME
+    findings_root = layout.reports_root / LEGACY_FINDINGS_DIRNAME
     if not findings_root.is_dir():
         return
     for bucket in LIFECYCLE_BUCKETS:
@@ -442,11 +461,17 @@ def _cleanup_stale_canonical_reports(layout: StorageLayout, finding: dict[str, A
 def _candidate_paths_for_fid(layout: StorageLayout, finding: dict[str, Any]) -> list[Path]:
     fid = _safe_fid_for(finding)
     candidates: list[Path] = []
-    current = finding.get("report_path")
-    if current:
-        candidates.append(Path(str(current)).expanduser())
-    findings_root = layout.reports_root / FINDINGS_DIRNAME
+    for key in ("report_path", "finalized_report_path"):
+        current = finding.get(key)
+        if current:
+            candidates.append(Path(str(current)).expanduser())
+    findings_root = layout.reports_root / LEGACY_FINDINGS_DIRNAME
+    packet_report = canonical_finding_report_path(layout, finding)
+    if packet_report.exists():
+        candidates.append(packet_report)
     if findings_root.is_dir():
+        # Legacy lifecycle folders are read/migration inputs only. New writes go
+        # to the stable per-FID packet above.
         for bucket in LIFECYCLE_BUCKETS:
             bucket_root = findings_root / bucket
             if bucket_root.is_dir():
@@ -529,18 +554,46 @@ def _preserve_hand_edited_report(layout: StorageLayout, finding: dict[str, Any],
     return selected
 
 
+def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Create the stable, agent-facing container for a finding report."""
+    packet_dir = canonical_finding_report_dir(layout, finding)
+    for child in (packet_dir, packet_dir / POC_DIRNAME, packet_dir / EVIDENCE_DIRNAME, packet_dir / META_DIRNAME):
+        child.mkdir(parents=True, exist_ok=True)
+    finding["report_dir"] = str(packet_dir)
+    return packet_dir
+
+
 def write_finding_report(layout: StorageLayout, finding: dict[str, Any]) -> Path:
-    path = canonical_finding_report_path(layout, finding)
+    """Write or preserve the canonical report inside its stable packet.
+
+    ``REPORT.md`` is the editable source; ``FINALIZED.md`` is reserved for a
+    submission-ready copy. Status/severity navigation is regenerated elsewhere
+    and never affects either path.
+    """
+    packet_dir = _ensure_finding_packet(layout, finding)
+    path = packet_dir / REPORT_FILENAME
     preserved_path = _preserve_hand_edited_report(layout, finding, path)
     if preserved_path is not None:
         _cleanup_stale_canonical_reports(layout, finding, preserved_path)
         return preserved_path
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     if is_generated_safe_finding_report(path):
         path.write_text(render_finding_report(finding), encoding="utf-8")
     _cleanup_stale_canonical_reports(layout, finding, path)
     return path
+
+
+def finalize_finding_report(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Create or refresh the explicit submission-ready copy of ``REPORT.md``.
+
+    This is deliberately opt-in: drafts remain editable and agents never
+    silently claim that a report is submission-ready.
+    """
+    report_path = write_finding_report(layout, finding)
+    finalized_path = canonical_finalized_report_path(layout, finding)
+    shutil.copyfile(report_path, finalized_path)
+    finding["finalized_report_path"] = str(finalized_path)
+    return finalized_path
 
 
 def _escape_table(value: Any) -> str:

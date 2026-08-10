@@ -29,7 +29,8 @@ reports/
   severity/
 ```
 
-- `reports/findings/{lifecycle}/` contains canonical finding reports, grouped by lifecycle such as `active`, `confirmed`, `dormant`, and `completed`.
+- `reports/{FID}/` is the immutable per-finding packet. It always contains the editable canonical `REPORT.md`; Bounty Core creates `poc/`, `evidence/`, and `_meta/` for agent artifacts. The optional `FINALIZED.md` is an explicit submission-ready copy made only by `finalize_finding_report`.
+- Lifecycle and severity are generated navigation views, not storage paths. `report_dir` and `report_path` remain valid when status, severity, or title changes.
 - `reports/daily/{MM-DD-YYYY}/` contains date-scoped views for active, confirmed, dormant, novel, and completed findings.
 - `reports/categories/{category}/` contains category indexes and per-FID links or stubs back to canonical finding reports.
 - `reports/severity/{high,medium,low}/` contains severity-focused indexes.
@@ -56,4 +57,4 @@ confirmed > active > dormant > completed
 
 It then chooses by severity priority and finally by natural FID order.
 
-Generated navigation uses Obsidian wikilinks for internal report links. Canonical finding links use the target report file stem, such as `[[D54 - MEDIUM - Unauthenticated recording blob read via custom protocol token enumeration|D54]]`, so they do not depend on absolute path prefixes or vault-root-relative path choices.
+Generated navigation uses Obsidian wikilinks for internal report links. Canonical finding links target the packet's stable `REPORT.md`, such as `[[REPORT|D54]]`; they do not depend on lifecycle, severity, title, or absolute path prefixes.

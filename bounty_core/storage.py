@@ -265,7 +265,6 @@ def ensure_layout(layout: StorageLayout) -> None:
         layout.program_root,
         layout.lane_root,
         layout.reports_root,
-        layout.reports_root / "findings",
         layout.reports_root / "daily",
         layout.reports_root / "categories",
         layout.reports_root / "severity",

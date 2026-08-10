@@ -68,8 +68,11 @@ def test_update_finding_preserves_observation_metadata_and_refreshes(tmp_path):
 
     assert not (layout.ledgers_root / "indexes" / "by_status" / "raw.json").exists()
     assert (layout.ledgers_root / "indexes" / "by_status" / "confirmed.json").exists()
-    assert Path(finding["report_path"]) == layout.reports_root / "findings" / "confirmed" / f"{finding['fid']} - HIGH - Reflected XSS on search.md"
-    assert not old_report_path.exists()
+    assert Path(finding["report_path"]) == layout.reports_root / finding["fid"] / "REPORT.md"
+    assert Path(finding["report_dir"]) == layout.reports_root / finding["fid"]
+    assert Path(finding["report_path"]).exists()
+    assert (Path(finding["report_dir"]) / "poc").is_dir()
+    assert (Path(finding["report_dir"]) / "evidence").is_dir()
     assert "Reflected XSS on search" in (layout.reports_root / "index" / "confirmed.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" not in (layout.reports_root / "index" / "raw.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" in (layout.reports_root / "confirmed" / "xss" / "index.md").read_text(encoding="utf-8")
@@ -86,7 +89,8 @@ def test_unsafe_identity_uses_safe_report_filename_without_changing_identity(tmp
     report_path = Path(stored["report_path"])
 
     assert stored["identity"] == "../../../../escape"
-    assert report_path == layout.reports_root / "findings" / "active" / f"{stored['fid']} - LOW - Reflected XSS on search.md"
+    assert report_path == layout.reports_root / stored["fid"] / "REPORT.md"
+    assert Path(stored["report_dir"]) == report_path.parent
     assert report_path.resolve(strict=False).is_relative_to(layout.reports_root.resolve(strict=False))
     assert not (layout.lane_root / "escape-reflected-xss-on-search.md").exists()
 
@@ -107,7 +111,7 @@ def test_update_finding_does_not_delete_report_path_outside_reports_root(tmp_pat
 
     assert updated["ok"] is True
     assert outside_report.read_text(encoding="utf-8") == "keep me\n"
-    assert Path(updated["finding"]["report_path"]) == layout.reports_root / "findings" / "confirmed" / f"{updated['finding']['fid']} - LOW - Reflected XSS on search.md"
+    assert Path(updated["finding"]["report_path"]) == layout.reports_root / updated["finding"]["fid"] / "REPORT.md"
 
 
 def test_get_by_report_path(tmp_path):
@@ -236,7 +240,6 @@ def test_duplicate_add_finding_status_move_rewrites_report_and_removes_stale_rep
 
     assert second["is_new"] is False
     assert second["finding"]["status"] == "confirmed"
-    assert new_report_path != old_report_path
-    assert not old_report_path.exists()
+    assert new_report_path == old_report_path
     assert new_report_path.exists()
     assert "Confirmed duplicate observation." in new_report_path.read_text(encoding="utf-8")

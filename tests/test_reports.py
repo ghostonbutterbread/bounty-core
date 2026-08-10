@@ -11,6 +11,8 @@ from bounty_core.reports import (
     FINDING_REPORT_GENERATED_MARKER,
     REPORT_NAV_GENERATED_MARKER,
     canonical_report_wikilink,
+    canonical_finalized_report_path,
+    canonical_finding_report_dir,
     canonical_finding_report_path,
     category_report_slug,
     is_generated_safe_finding_report,
@@ -19,6 +21,7 @@ from bounty_core.reports import (
     refresh_report_indexes,
     render_finding_report,
     safe_symlink_or_link_stub,
+    finalize_finding_report,
     write_finding_report,
 )
 from bounty_core.storage import resolve_storage
@@ -55,10 +58,43 @@ def test_write_finding_report_uses_stable_fid_path(tmp_path):
     changed = _finding(title="Changed title", status="confirmed", type="xss")
     changed_path = write_finding_report(layout, changed)
 
-    assert first_path == layout.reports_root / "findings" / "active" / "D01 - HIGH - Original title.md"
-    assert changed_path == layout.reports_root / "findings" / "confirmed" / "D01 - HIGH - Changed title.md"
+    expected = layout.reports_root / "D01" / "REPORT.md"
+    assert first_path == expected
+    assert changed_path == expected
     assert canonical_finding_report_path(layout, changed) == changed_path
-    assert not first_path.exists()
+    assert canonical_finding_report_dir(layout, changed) == expected.parent
+    assert (expected.parent / "poc").is_dir()
+    assert (expected.parent / "evidence").is_dir()
+    assert (expected.parent / "_meta").is_dir()
+
+
+def test_write_finding_report_migrates_stale_legacy_status_path_into_packet(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D09", status="dormant", title="Stable report")
+    legacy = layout.reports_root / "findings" / "confirmed" / "D09 - HIGH - Stable report.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("# Hand-authored report\n\nProof remains here.\n", encoding="utf-8")
+    finding["report_path"] = str(layout.reports_root / "findings" / "dormant" / "D09 - HIGH - Stable report.md")
+
+    report_path = write_finding_report(layout, finding)
+
+    assert report_path == layout.reports_root / "D09" / "REPORT.md"
+    assert not legacy.exists()
+    assert "Proof remains here." in report_path.read_text(encoding="utf-8")
+    assert finding["report_dir"] == str(report_path.parent)
+
+
+def test_finalize_finding_report_copies_explicit_submission_artifact(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(title="Reviewed report")
+    report_path = write_finding_report(layout, finding)
+    report_path.write_text("# Reviewed report\n\nReady for submission.\n", encoding="utf-8")
+
+    finalized_path = finalize_finding_report(layout, finding)
+
+    assert finalized_path == canonical_finalized_report_path(layout, finding)
+    assert finalized_path.read_text(encoding="utf-8") == report_path.read_text(encoding="utf-8")
+    assert finding["finalized_report_path"] == str(finalized_path)
 
 
 def test_write_finding_report_marks_and_updates_only_generated_safe_body(tmp_path):
@@ -69,16 +105,15 @@ def test_write_finding_report_marks_and_updates_only_generated_safe_body(tmp_pat
     assert is_generated_safe_finding_report(first_path)
 
     changed_path = write_finding_report(layout, _finding(title="Changed title"))
-    assert changed_path != first_path
-    assert not first_path.exists()
+    assert changed_path == first_path
     assert "# Changed title" in changed_path.read_text(encoding="utf-8")
 
     changed_path.write_text(changed_path.read_text(encoding="utf-8") + "\nManual reviewer note.\n", encoding="utf-8")
     assert not is_generated_safe_finding_report(changed_path)
     preserved_path = write_finding_report(layout, _finding(title="Overwrite attempt"))
 
-    assert preserved_path == layout.reports_root / "findings" / "dormant" / "D01 - HIGH - Overwrite attempt.md"
-    assert not changed_path.exists()
+    assert preserved_path == changed_path
+    assert preserved_path.exists()
     edited_text = preserved_path.read_text(encoding="utf-8")
     assert "Manual reviewer note." in edited_text
     assert "Overwrite attempt" not in edited_text
@@ -92,8 +127,8 @@ def test_write_finding_report_moves_hand_edited_same_fid_to_new_canonical_path(t
     changed = _finding(title="Changed (reviewed) title", status="confirmed", severity="P2")
     new_path = write_finding_report(layout, changed)
 
-    assert new_path == layout.reports_root / "findings" / "confirmed" / "D01 - HIGH - Changed (reviewed) title.md"
-    assert not old_path.exists()
+    assert new_path == old_path
+    assert old_path.exists()
     text = new_path.read_text(encoding="utf-8")
     assert "Manual reviewer note." in text
     assert "Changed (reviewed) title" not in text
@@ -118,7 +153,7 @@ def test_refresh_report_indexes_writes_daily_month_first_link_views(tmp_path):
     assert "D01%20-%20HIGH" not in dormant
     assert "<../../findings/dormant" not in dormant
     assert "../../findings/dormant/D01 - HIGH - Renderer bridge requires prior XSS.md" not in dormant
-    assert "[[D01 - HIGH - Renderer bridge requires prior XSS|D01]]" in dormant
+    assert "[[REPORT|D01]]" in dormant
     assert "Full vulnerability body text that must stay out of navigation." not in dormant
     assert not (layout.reports_root / "dormant" / "06-13-2026").exists()
 
@@ -358,7 +393,7 @@ def test_refresh_report_indexes_removes_stale_generated_daily_views_after_move(t
     assert manual_note.read_text(encoding="utf-8") == "# Manual daily note\n\nKeep this.\n"
     new_text = new_confirmed.read_text(encoding="utf-8")
     assert "M01" in new_text
-    assert "[[M01 - HIGH - Moved daily issue|M01]]" in new_text
+    assert "[[REPORT|M01]]" in new_text
     assert "Original daily issue" not in new_text
 
 
@@ -447,15 +482,17 @@ def test_refresh_report_navigation_from_ledger_preserves_hand_edited_finding_rep
 
     refresh_report_navigation_from_ledger(layout)
 
-    moved_path = layout.reports_root / "findings" / "confirmed" / "D01 - HIGH - Ledger refresh title.md"
-    assert not report_path.exists()
-    text = moved_path.read_text(encoding="utf-8")
+    stable_path = layout.reports_root / "D01" / "REPORT.md"
+    assert report_path == stable_path
+    assert stable_path.exists()
+    text = stable_path.read_text(encoding="utf-8")
     assert "Manual reviewer note." in text
     assert "Ledger refresh title" not in text
     payload = json.loads((layout.ledgers_root / "ledger.json").read_text(encoding="utf-8"))
-    assert payload["findings"][0]["report_path"] == str(moved_path)
+    assert payload["findings"][0]["report_path"] == str(stable_path)
+    assert payload["findings"][0]["report_dir"] == str(stable_path.parent)
     daily_confirmed = next((layout.reports_root / "daily").glob("*/confirmed.md"))
-    assert "[[D01 - HIGH - Ledger refresh title|D01]]" in daily_confirmed.read_text(encoding="utf-8")
+    assert "[[REPORT|D01]]" in daily_confirmed.read_text(encoding="utf-8")
 
 
 def test_obsidian_report_link_uses_wikilink_relative_target_without_markdown_suffix(tmp_path):

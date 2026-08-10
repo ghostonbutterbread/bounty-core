@@ -360,8 +360,8 @@ def test_update_finding_preserves_hand_edited_canonical_report(tmp_path):
 
     assert updated["ok"] is True
     moved_path = Path(updated["finding"]["report_path"])
-    assert moved_path != report_path
-    assert not report_path.exists()
+    assert moved_path == report_path
+    assert report_path.exists()
     text = moved_path.read_text(encoding="utf-8")
     assert "Manual reviewer note." in text
     assert "Updated title from ledger" not in text
