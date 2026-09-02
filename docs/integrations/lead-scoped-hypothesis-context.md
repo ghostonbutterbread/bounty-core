@@ -6,7 +6,7 @@ Add a lead-linked, explicit follow-up retrieval path while keeping ordinary hypo
 ## Branch topology
 - Feature branch: `feat/lead-scoped-hypothesis-context`
 - Base: `origin/master` at `dc31a6c4e8394dd7795056a545c8bb7b5417f4ab`
-- Intended successor: BBH `feat/blackbox-evidence-routing`; no runtime activation.
+- Intended integration target: Core `beta`, then BBH `feat/blackbox-evidence-routing`; no runtime activation.
 
 ## Implemented contract
 - Hypotheses may link to an opaque public lead ID.
@@ -20,5 +20,8 @@ Add a lead-linked, explicit follow-up retrieval path while keeping ordinary hypo
 - `PYTHONPATH=. uv run --with pytest python -m pytest -q` — 104 passed.
 - `git diff --check` passed before this checkpoint.
 
-## Remaining work
-Independent re-review after the migration correction, then BBH must consume a committed Bounty Core revision; do not assume an uncommitted local Core checkout is runtime-visible. BBH/Leads remains responsible for validating that an exact public Lead card exists before requesting Core follow-up context.
+## Review and next gate
+
+- Independent re-review accepted `5089b104e7229cbf0f012875a4fbe3dc8d271af5`: no blockers; full suite `104 passed`; legacy migration was manually verified twice with preserved rows, indexes, and `PRAGMA integrity_check=ok`.
+- Merge this reviewed feature into a clean Core `beta` lane and publish that lane before BBH consumes it.
+- BBH/Leads remains responsible for validating that an exact public Lead card exists before requesting Core follow-up context. BBH must pin the published immutable Core revision and rerun its isolated suite; no runtime activation is part of this work.
