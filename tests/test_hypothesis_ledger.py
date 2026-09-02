@@ -2,7 +2,108 @@ from __future__ import annotations
 
 import sqlite3
 
-from bounty_core.hypothesis_ledger import HypothesisLedger
+from bounty_core.hypothesis_ledger import HypothesisLedger, UNRESOLVED_STATUSES
+
+
+def test_current_surface_review_requires_exact_scope_and_includes_active_peers_without_mutation(tmp_path):
+    import pytest
+
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0])
+    mine = ledger.create(agent_id="agent-a", run_id="run-a", title="Mine", surface="export", url="https://app.example/export?a=1&b=2", tags=["pdf"])
+    peer = ledger.create(agent_id="agent-b", run_id="run-b", title="Peer", surface="export", url="https://APP.example/export?b=2&a=1", tags=["pdf", "worker"])
+    wrong_url = ledger.create(agent_id="agent-c", run_id="run-c", title="Wrong URL", surface="export", url="https://app.example/export?a=2", tags=["pdf"])
+    terminal = ledger.create(agent_id="agent-d", run_id="run-d", title="Terminal", surface="export", url="https://app.example/export?a=1&b=2", tags=["pdf"])
+    ledger.complete(terminal["id"], agent_id="agent-d", run_id="run-d")
+    with sqlite3.connect(ledger.db_path) as conn:
+        before = {row[0]: (row[1], row[2]) for row in conn.execute("SELECT id, status, updated_at FROM hypotheses")}
+
+    with pytest.raises(ValueError, match="surface is required"):
+        ledger.review_current_surface(viewer_agent_id="viewer", viewer_run_id="run", surface=" ", url="https://app.example/export", review_intent="current-surface-peer-history")
+    with pytest.raises(ValueError, match="review_intent"):
+        ledger.review_current_surface(viewer_agent_id="viewer", viewer_run_id="run", surface="export", url="https://app.example/export?a=1&b=2", review_intent="wrong")
+
+    result = ledger.review_current_surface(viewer_agent_id="viewer", viewer_run_id="run", surface="export", url="https://APP.example/export?b=2&a=1", tags=["pdf"], review_intent="current-surface-peer-history")
+
+    assert result["review_scope"] == "peer-current-surface"
+    assert result["query"] == {"surface": "export", "url": "https://app.example/export?a=1&b=2", "tags": ["pdf"], "statuses": sorted(UNRESOLVED_STATUSES)}
+    assert {item["id"] for item in result["results"]} == {mine["id"], peer["id"]}
+    assert result["total_matching_count"] == result["returned_count"] == 2
+    assert all(item["id"] not in {wrong_url["id"], terminal["id"]} for item in result["results"])
+    with sqlite3.connect(ledger.db_path) as conn:
+        after = {row[0]: (row[1], row[2]) for row in conn.execute("SELECT id, status, updated_at FROM hypotheses")}
+        event, payload = conn.execute("SELECT event, payload_json FROM hypothesis_events ORDER BY sequence DESC LIMIT 1").fetchone()
+    assert after == before
+    assert event == "peer_surface_reviewed"
+    assert "Mine" not in payload and "Peer" not in payload
+
+
+def test_current_surface_review_pagination_is_stable_and_private_list_emits_no_review_event(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0])
+    items = []
+    for title in ("one", "two", "three"):
+        now[0] += 1
+        items.append(ledger.create(agent_id="peer", run_id=title, title=title, surface="export", url="https://app.example/export", tags=[]))
+    ledger.list_visible(agent_id="peer", run_id="one")
+    with sqlite3.connect(ledger.db_path) as conn:
+        baseline = conn.execute("SELECT count(*) FROM hypothesis_events WHERE event='peer_surface_reviewed'").fetchone()[0]
+
+    first = ledger.review_current_surface(viewer_agent_id="reviewer", viewer_run_id="review", surface="export", url="https://app.example/export", review_intent="current-surface-peer-history", limit=2)
+    second = ledger.review_current_surface(viewer_agent_id="reviewer", viewer_run_id="review", surface="export", url="https://app.example/export", review_intent="current-surface-peer-history", limit=2, cursor=first["cursor"])
+
+    assert [item["id"] for item in first["results"] + second["results"]] == [item["id"] for item in reversed(items)]
+    assert first["has_more"] is True and second["has_more"] is False
+    assert first["total_matching_count"] == second["total_matching_count"] == 3
+    with sqlite3.connect(ledger.db_path) as conn:
+        assert conn.execute("SELECT count(*) FROM hypothesis_events WHERE event='peer_surface_reviewed'").fetchone()[0] == baseline + 2
+
+
+def test_operator_app_review_validates_marker_and_request_id_and_groups_paginated_peers(tmp_path):
+    import pytest
+
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0])
+    first = ledger.create(agent_id="agent-a", run_id="run-a", title="Export", surface="export", url="https://app.example/export", tags=[])
+    now[0] += 1
+    second = ledger.create(agent_id="agent-b", run_id="run-b", title="Billing", surface="billing", url="https://app.example/billing", tags=[])
+    done = ledger.create(agent_id="agent-c", run_id="run-c", title="Done", surface="billing", url="https://app.example/billing", tags=[])
+    ledger.complete(done["id"], agent_id="agent-c", run_id="run-c")
+
+    with pytest.raises(ValueError, match="operator_request_id is required"):
+        ledger.operator_app_review(actor_agent_id="operator", actor_run_id="run", operator_request_id=" ", operator_intent="application-thinking-review")
+    with pytest.raises(ValueError, match="operator_intent"):
+        ledger.operator_app_review(actor_agent_id="operator", actor_run_id="run", operator_request_id="request-1", operator_intent="wrong")
+
+    page = ledger.operator_app_review(actor_agent_id="operator", actor_run_id="run", operator_request_id="request-1", operator_intent="application-thinking-review", limit=1)
+    tail = ledger.operator_app_review(actor_agent_id="operator", actor_run_id="run", operator_request_id="request-1", operator_intent="application-thinking-review", limit=1, cursor=page["cursor"])
+
+    assert page["review_scope"] == "operator-app-wide"
+    assert page["operator_request_id"] == "request-1"
+    assert page["total_matching_count"] == tail["total_matching_count"] == 2
+    assert [item["id"] for item in page["results"] + tail["results"]] == [second["id"], first["id"]]
+    assert page["surface_counts"] == {"billing": 1, "export": 1}
+    with sqlite3.connect(ledger.db_path) as conn:
+        event, payload = conn.execute("SELECT event, payload_json FROM hypothesis_events ORDER BY sequence DESC LIMIT 1").fetchone()
+    assert event == "operator_app_reviewed"
+    assert "Export" not in payload and "Billing" not in payload
+
+
+def test_review_indexes_migrate_legacy_hypotheses_without_data_loss(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    ledger.root.mkdir(parents=True)
+    with sqlite3.connect(ledger.db_path) as conn:
+        conn.executescript("""
+            CREATE TABLE hypotheses (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT NOT NULL, surface TEXT NOT NULL, url TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL, expected_chain TEXT, next_discriminator TEXT, evidence_refs_json TEXT NOT NULL, status TEXT NOT NULL, owner_agent_id TEXT NOT NULL, owner_run_id TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL, completed_at REAL);
+            INSERT INTO hypotheses VALUES ('H-old', NULL, 'Legacy', 'export', 'https://app.example/export', '[]', NULL, NULL, '[]', 'candidate', 'a', 'r', 1, 1, NULL);
+        """)
+
+    result = ledger.review_current_surface(viewer_agent_id="viewer", viewer_run_id="run", surface="export", url="https://app.example/export", review_intent="current-surface-peer-history")
+
+    assert [item["id"] for item in result["results"]] == ["H-old"]
+    with sqlite3.connect(ledger.db_path) as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(hypotheses)")}
+    assert {"idx_hypotheses_review_surface_url", "idx_hypotheses_review_status"} <= indexes
 
 
 def test_private_hypotheses_remain_hidden_until_linked_lead_followup_after_owner_stales(tmp_path):
