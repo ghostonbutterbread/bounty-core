@@ -5,7 +5,7 @@ import sqlite3
 from bounty_core.hypothesis_ledger import HypothesisLedger
 
 
-def test_creator_private_hypotheses_are_hidden_until_owner_stales(tmp_path):
+def test_private_hypotheses_remain_hidden_until_linked_lead_followup_after_owner_stales(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger(
         "demo",
@@ -22,16 +22,29 @@ def test_creator_private_hypotheses_are_hidden_until_owner_stales(tmp_path):
         url="https://App.Example/export/?b=2&a=1",
         surface="export",
         tags=["pdf", "worker", "signed-url"],
+        lead_id="L-export",
     )
 
     assert ledger.list_visible(agent_id="agent-a", run_id="run-a") == [created]
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
 
     now[0] += 2 * 60 * 60 + 1
-    reclaimable = ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")
+    reclaimable = ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")
     assert [item["id"] for item in reclaimable] == [created["id"]]
     assert reclaimable[0]["visibility"] == "reclaimable"
     assert reclaimable[0]["url"] == "https://app.example/export?a=1&b=2"
+
+
+def test_lead_followup_reveals_only_released_linked_context(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    released = ledger.create(agent_id="agent-a", run_id="run-a", title="Lead branch", surface="export", tags=["worker"], lead_id="L-export")
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Private branch", surface="export", tags=["worker"], lead_id="L-export")
+
+    ledger.release(released["id"], agent_id="agent-a", run_id="run-a")
+
+    visible = ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")
+    assert [(item["id"], item["visibility"]) for item in visible] == [(released["id"], "released")]
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
 
 
 def test_owner_heartbeat_keeps_untouched_private_backlog_private(tmp_path):
@@ -157,14 +170,14 @@ def test_child_creation_requires_live_ownership_of_the_parent(tmp_path):
         ledger.create(agent_id="agent-b", run_id="run-b", title="Unauthorized child", surface="export", tags=["worker"], parent_id=parent["id"])
 
 
-def test_non_owner_recovery_requires_an_explicit_scope_filter(tmp_path):
+def test_non_owner_discovery_never_exposes_stale_hypotheses(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
-    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"])
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"], lead_id="L-export")
     now[0] += 11
 
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
-    assert len(ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")) == 1
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
 
 
 def test_fractional_ttl_is_rejected(tmp_path):
