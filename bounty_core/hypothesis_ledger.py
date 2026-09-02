@@ -375,7 +375,6 @@ class HypothesisLedger:
             );
             CREATE INDEX IF NOT EXISTS idx_hypotheses_owner ON hypotheses(owner_agent_id, owner_run_id, status);
             CREATE INDEX IF NOT EXISTS idx_hypotheses_url ON hypotheses(url, surface, status);
-            CREATE INDEX IF NOT EXISTS idx_hypotheses_lead ON hypotheses(lead_id, status);
             CREATE TABLE IF NOT EXISTS hypothesis_events (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                 event TEXT NOT NULL,

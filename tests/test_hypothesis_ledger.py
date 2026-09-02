@@ -199,6 +199,48 @@ def test_fractional_ttl_is_rejected(tmp_path):
         HypothesisLedger("demo", root_override=tmp_path, ttl_seconds=0.5)
 
 
+def test_legacy_hypotheses_migrate_before_lead_index_creation_and_preserve_rows(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: 2_000.0)
+    ledger.root.mkdir(parents=True)
+    with sqlite3.connect(ledger.db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE hypotheses (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT REFERENCES hypotheses(id),
+                title TEXT NOT NULL,
+                surface TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL,
+                expected_chain TEXT,
+                next_discriminator TEXT,
+                evidence_refs_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                owner_agent_id TEXT NOT NULL,
+                owner_run_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                completed_at REAL
+            );
+            INSERT INTO hypotheses VALUES (
+                'H-legacy', NULL, 'Legacy private branch', 'export', '', '[]', NULL,
+                NULL, '[]', 'candidate', 'agent-a', 'run-a', 1.0, 1.0, NULL
+            );
+            """
+        )
+
+    visible = ledger.list_visible(agent_id="agent-a", run_id="run-a")
+
+    assert [item["id"] for item in visible] == ["H-legacy"]
+    assert visible[0]["lead_id"] is None
+    assert visible[0]["context_state"] == "private"
+    with sqlite3.connect(ledger.db_path) as conn:
+        assert {row[1] for row in conn.execute("PRAGMA table_info(hypotheses)")} >= {"lead_id", "context_state"}
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_hypotheses_lead'").fetchone()
+
+    assert ledger.list_visible(agent_id="agent-a", run_id="run-a")[0]["id"] == "H-legacy"
+
+
 def test_legacy_hypothesis_heartbeats_migrate_to_the_core_namespace(tmp_path):
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: 2_000.0)
     ledger.root.mkdir(parents=True)
