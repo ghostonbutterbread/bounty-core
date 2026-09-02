@@ -11,6 +11,7 @@ import json
 import sqlite3
 import time
 import uuid
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -179,6 +180,74 @@ class HypothesisLedger:
                     continue
                 result.append(self._with_visibility(item, viewer_agent_id=agent_id, viewer_run_id=run_id, timestamp=timestamp, owner_live=owner_live))
             return result
+
+    def review_current_surface(self, *, viewer_agent_id: str, viewer_run_id: str, surface: str, url: str, review_intent: str, tags: Iterable[str] = (), statuses: Iterable[str] | None = None, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        """Deliberately review unresolved peer history for one exact surface URL."""
+        surface = _required(surface, "surface")
+        normalized_url = normalize_url(_required(url, "url"))
+        _required(viewer_agent_id, "viewer_agent_id")
+        _required(viewer_run_id, "viewer_run_id")
+        if review_intent != "current-surface-peer-history":
+            raise ValueError("review_intent must be 'current-surface-peer-history'")
+        return self._review(
+            actor_agent_id=viewer_agent_id, actor_run_id=viewer_run_id,
+            event="peer_surface_reviewed", review_scope="peer-current-surface",
+            query={"surface": surface, "url": normalized_url, "tags": _tags(tags), "statuses": _review_statuses(statuses)},
+            review_intent=review_intent, limit=_review_limit(limit, default=25, maximum=50), cursor=cursor,
+        )
+
+    def operator_app_review(self, *, actor_agent_id: str, actor_run_id: str, operator_request_id: str, operator_intent: str, statuses: Iterable[str] | None = None, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+        """Trusted-cooperative program-wide unresolved hypothesis review."""
+        _required(actor_agent_id, "actor_agent_id")
+        _required(actor_run_id, "actor_run_id")
+        operator_request_id = _required(operator_request_id, "operator_request_id")
+        if operator_intent != "application-thinking-review":
+            raise ValueError("operator_intent must be 'application-thinking-review'")
+        return self._review(
+            actor_agent_id=actor_agent_id, actor_run_id=actor_run_id,
+            event="operator_app_reviewed", review_scope="operator-app-wide",
+            query={"statuses": _review_statuses(statuses)}, operator_request_id=operator_request_id,
+            operator_intent=operator_intent, limit=_review_limit(limit, default=50, maximum=100), cursor=cursor,
+        )
+
+    def _review(self, *, actor_agent_id: str, actor_run_id: str, event: str, review_scope: str, query: dict[str, Any], limit: int, cursor: str | None, review_intent: str | None = None, operator_request_id: str | None = None, operator_intent: str | None = None) -> dict[str, Any]:
+        cursor_key = _review_cursor(cursor, review_scope, query)
+        statuses = query["statuses"]
+        conditions = ["status IN ({})".format(",".join("?" for _ in statuses))]
+        params: list[Any] = list(statuses)
+        if "surface" in query:
+            conditions.extend(("surface=?", "url=?"))
+            params.extend((query["surface"], query["url"]))
+        with self._connection() as conn:
+            self._init(conn)
+            rows = [_row_payload(row) for row in conn.execute(f"SELECT * FROM hypotheses WHERE {' AND '.join(conditions)}", params).fetchall()]
+            required_tags = set(query.get("tags", ()))
+            if required_tags:
+                rows = [item for item in rows if required_tags.issubset(item["tags"])]
+            surface_counts = _surface_counts_for_rows(rows)
+            rows.sort(key=lambda item: (-item["updated_at"], item["id"]))
+            total_matching_count = len(rows)
+            if cursor_key is not None:
+                updated_at, hypothesis_id = cursor_key
+                rows = [item for item in rows if item["updated_at"] < updated_at or (item["updated_at"] == updated_at and item["id"] > hypothesis_id)]
+            page = rows[:limit]
+            has_more = len(rows) > limit
+            next_cursor = _encode_review_cursor(review_scope, query, page[-1]) if has_more else None
+            timestamp = self._now()
+            audit_payload: dict[str, Any] = {"schema_version": 1, "review_scope": review_scope, "query": query, "limit": limit, "cursor_present": cursor is not None, "returned_count": len(page), "total_matching_count": total_matching_count, "has_more": has_more, "result_owners": [[item["owner_agent_id"], item["owner_run_id"]] for item in page]}
+            if review_intent is not None:
+                audit_payload["review_intent"] = review_intent
+            if operator_request_id is not None:
+                audit_payload.update(operator_request_id=operator_request_id, operator_intent=operator_intent)
+            conn.execute("BEGIN IMMEDIATE")
+            self._event(conn, event, None, actor_agent_id, actor_run_id, timestamp, **audit_payload)
+            conn.commit()
+        result: dict[str, Any] = {"review_scope": review_scope, "query": query, "limit": limit, "results": page, "returned_count": len(page), "total_matching_count": total_matching_count, "has_more": has_more, "cursor": next_cursor}
+        if review_intent is not None:
+            result["review_intent"] = review_intent
+        if operator_request_id is not None:
+            result.update(operator_request_id=operator_request_id, operator_intent=operator_intent, surface_counts=surface_counts)
+        return result
 
     def release(self, hypothesis_id: str, *, agent_id: str, run_id: str) -> dict[str, Any]:
         timestamp = self._now()
@@ -382,6 +451,8 @@ class HypothesisLedger:
             );
             CREATE INDEX IF NOT EXISTS idx_hypotheses_owner ON hypotheses(owner_agent_id, owner_run_id, status);
             CREATE INDEX IF NOT EXISTS idx_hypotheses_url ON hypotheses(url, surface, status);
+            CREATE INDEX IF NOT EXISTS idx_hypotheses_review_surface_url ON hypotheses(surface, url, status, updated_at DESC, id);
+            CREATE INDEX IF NOT EXISTS idx_hypotheses_review_status ON hypotheses(status, updated_at DESC, id);
             CREATE TABLE IF NOT EXISTS hypothesis_events (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                 event TEXT NOT NULL,
@@ -514,3 +585,43 @@ def _strings(values: Iterable[str]) -> list[str]:
 
 def _tags(values: Iterable[str]) -> list[str]:
     return sorted({str(value).strip().lower().replace("_", "-") for value in values if str(value).strip()})
+
+
+def _review_statuses(values: Iterable[str] | None) -> list[str]:
+    statuses = sorted({_status(value) for value in values} if values is not None else UNRESOLVED_STATUSES)
+    if not statuses or not set(statuses).issubset(UNRESOLVED_STATUSES):
+        raise ValueError("review statuses must be a non-empty unresolved status subset")
+    return statuses
+
+
+def _review_limit(value: int, *, default: int, maximum: int) -> int:
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
+        raise ValueError(f"limit must be an integer from 1 to {maximum}")
+    return value
+
+
+def _encode_review_cursor(review_scope: str, query: dict[str, Any], item: dict[str, Any]) -> str:
+    payload = {"v": 1, "scope": review_scope, "query": query, "updated_at": item["updated_at"], "id": item["id"]}
+    return urlsafe_b64encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def _review_cursor(cursor: str | None, review_scope: str, query: dict[str, Any]) -> tuple[float, str] | None:
+    if cursor is None:
+        return None
+    try:
+        encoded = str(cursor)
+        payload = json.loads(urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        if payload["v"] != 1 or payload["scope"] != review_scope or payload["query"] != query:
+            raise ValueError
+        return float(payload["updated_at"]), str(payload["id"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("invalid review cursor") from error
+
+
+def _surface_counts_for_rows(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in rows:
+        counts[item["surface"]] = counts.get(item["surface"], 0) + 1
+    return dict(sorted(counts.items()))
