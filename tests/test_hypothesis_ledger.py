@@ -183,14 +183,55 @@ def test_child_creation_requires_live_ownership_of_the_parent(tmp_path):
         ledger.create(agent_id="agent-b", run_id="run-b", title="Unauthorized child", surface="export", tags=["worker"], parent_id=parent["id"])
 
 
-def test_non_owner_discovery_never_exposes_stale_hypotheses(tmp_path):
+def test_non_owner_generic_discovery_excludes_stale_released_lead_context(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
-    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"], lead_id="L-export")
+    released = ledger.create(
+        agent_id="agent-a",
+        run_id="run-a",
+        title="Released export lead context",
+        surface="export",
+        tags=["worker"],
+        lead_id="L-export",
+    )
+    ledger.release(released["id"], agent_id="agent-a", run_id="run-a")
+    now[0] += 11
+
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
+    assert [item["id"] for item in ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")] == [released["id"]]
+
+
+def test_non_owner_can_discover_stale_unresolved_hypotheses_only_with_a_scope_filter(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    created = ledger.create(
+        agent_id="agent-a",
+        run_id="run-a",
+        title="Export worker",
+        url="https://app.example/export?a=1&b=2",
+        surface="export",
+        tags=["worker"],
+    )
     now[0] += 11
 
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
+    expected = [(created["id"], "reclaimable", False)]
+    for visible in (
+        ledger.list_visible(agent_id="agent-b", run_id="run-b", url="https://APP.EXAMPLE/export?b=2&a=1"),
+        ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export"),
+        ledger.list_visible(agent_id="agent-b", run_id="run-b", tags=["worker"]),
+    ):
+        assert [(item["id"], item["visibility"], item["owner_live"]) for item in visible] == expected
+
+
+def test_non_owner_cannot_discover_active_peer_hypotheses_or_bypass_scope_with_status(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"])
+
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", statuses=["candidate"]) == []
 
 
 def test_fractional_ttl_is_rejected(tmp_path):
