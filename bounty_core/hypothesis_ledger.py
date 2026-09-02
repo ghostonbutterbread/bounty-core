@@ -164,7 +164,11 @@ class HypothesisLedger:
                 owner_live = self._owner_live(conn, item["owner_agent_id"], item["owner_run_id"], timestamp)
                 is_owner = item["owner_agent_id"] == agent_id and item["owner_run_id"] == run_id
                 if not is_owner and (
-                    not has_scope_filter or owner_live or item["status"] not in UNRESOLVED_STATUSES
+                    not has_scope_filter
+                    or owner_live
+                    or item["status"] not in UNRESOLVED_STATUSES
+                    or item["lead_id"] is not None
+                    or item["context_state"] != "private"
                 ):
                     continue
                 if normalized_url and item["url"] != normalized_url:

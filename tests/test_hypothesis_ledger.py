@@ -183,6 +183,24 @@ def test_child_creation_requires_live_ownership_of_the_parent(tmp_path):
         ledger.create(agent_id="agent-b", run_id="run-b", title="Unauthorized child", surface="export", tags=["worker"], parent_id=parent["id"])
 
 
+def test_non_owner_generic_discovery_excludes_stale_released_lead_context(tmp_path):
+    now = [1_000.0]
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
+    released = ledger.create(
+        agent_id="agent-a",
+        run_id="run-a",
+        title="Released export lead context",
+        surface="export",
+        tags=["worker"],
+        lead_id="L-export",
+    )
+    ledger.release(released["id"], agent_id="agent-a", run_id="run-a")
+    now[0] += 11
+
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
+    assert [item["id"] for item in ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")] == [released["id"]]
+
+
 def test_non_owner_can_discover_stale_unresolved_hypotheses_only_with_a_scope_filter(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
