@@ -69,6 +69,7 @@ class HypothesisLedger:
         expected_chain: str | None = None,
         next_discriminator: str | None = None,
         evidence_refs: Iterable[str] = (),
+        lead_id: str | None = None,
         status: str = "candidate",
     ) -> dict[str, Any]:
         normalized_status = _status(status)
@@ -88,6 +89,8 @@ class HypothesisLedger:
             "expected_chain": _optional(expected_chain),
             "next_discriminator": _optional(next_discriminator),
             "evidence_refs": _strings(evidence_refs),
+            "lead_id": _optional(lead_id),
+            "context_state": "private",
             "status": normalized_status,
             "owner_agent_id": _required(agent_id, "agent_id"),
             "owner_run_id": _required(run_id, "run_id"),
@@ -114,11 +117,11 @@ class HypothesisLedger:
                 """
                 INSERT INTO hypotheses(
                     id, parent_id, title, surface, url, tags_json, expected_chain,
-                    next_discriminator, evidence_refs_json, status, owner_agent_id,
+                    next_discriminator, evidence_refs_json, lead_id, context_state, status, owner_agent_id,
                     owner_run_id, created_at, updated_at, completed_at
                 ) VALUES(:id, :parent_id, :title, :surface, :url, :tags_json,
                     :expected_chain, :next_discriminator, :evidence_refs_json,
-                    :status, :owner_agent_id, :owner_run_id, :created_at,
+                    :lead_id, :context_state, :status, :owner_agent_id, :owner_run_id, :created_at,
                     :updated_at, :completed_at)
                 """,
                 {**payload, "tags_json": json.dumps(payload["tags"]), "evidence_refs_json": json.dumps(payload["evidence_refs"])},
@@ -150,7 +153,6 @@ class HypothesisLedger:
         timestamp = self._now()
         required_tags = set(_tags(tags))
         normalized_url = normalize_url(url or "")
-        has_recovery_scope = bool(normalized_url or surface or required_tags)
         requested_statuses = {_status(item) for item in statuses} if statuses is not None else UNRESOLVED_STATUSES
         with self._connection() as conn:
             self._init(conn)
@@ -160,11 +162,7 @@ class HypothesisLedger:
                 item = _row_payload(row)
                 owner_live = self._owner_live(conn, item["owner_agent_id"], item["owner_run_id"], timestamp)
                 is_owner = item["owner_agent_id"] == agent_id and item["owner_run_id"] == run_id
-                if not is_owner and (
-                    owner_live
-                    or item["status"] not in UNRESOLVED_STATUSES
-                    or not has_recovery_scope
-                ):
+                if item["owner_agent_id"] != agent_id or item["owner_run_id"] != run_id:
                     continue
                 if normalized_url and item["url"] != normalized_url:
                     continue
@@ -173,6 +171,51 @@ class HypothesisLedger:
                 if required_tags and not required_tags.issubset(set(item["tags"])):
                     continue
                 result.append(self._with_visibility(item, viewer_agent_id=agent_id, viewer_run_id=run_id, timestamp=timestamp, owner_live=owner_live))
+            return result
+
+    def release(self, hypothesis_id: str, *, agent_id: str, run_id: str) -> dict[str, Any]:
+        timestamp = self._now()
+        with self._connection() as conn:
+            self._init(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._row(conn, hypothesis_id)
+            if row is None:
+                raise KeyError(f"hypothesis not found: {hypothesis_id}")
+            item = _row_payload(row)
+            if item["owner_agent_id"] != agent_id or item["owner_run_id"] != run_id:
+                raise PermissionError("only the current owner may release a hypothesis")
+            if not self._owner_live(conn, agent_id, run_id, timestamp):
+                raise PermissionError("stale owners cannot release; reclaim the hypothesis first")
+            if not item["lead_id"]:
+                raise ValueError("release requires a lead-linked hypothesis")
+            conn.execute("UPDATE hypotheses SET context_state='released', updated_at=? WHERE id=?", (timestamp, hypothesis_id))
+            self._event(conn, "released", hypothesis_id, agent_id, run_id, timestamp, lead_id=item["lead_id"])
+            conn.commit()
+            updated_row = self._row(conn, hypothesis_id)
+            assert updated_row is not None
+            updated = _row_payload(updated_row)
+        return self._with_visibility(updated, viewer_agent_id=agent_id, viewer_run_id=run_id, timestamp=timestamp, owner_live=True)
+
+    def lead_followup(self, *, agent_id: str, run_id: str, lead_id: str) -> list[dict[str, Any]]:
+        lead_id = _required(lead_id, "lead_id")
+        timestamp = self._now()
+        with self._connection() as conn:
+            self._init(conn)
+            rows = conn.execute(
+                "SELECT * FROM hypotheses WHERE lead_id=? AND status IN ({}) ORDER BY created_at, id".format(",".join("?" for _ in UNRESOLVED_STATUSES)),
+                (lead_id, *sorted(UNRESOLVED_STATUSES)),
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = _row_payload(row)
+                is_owner = item["owner_agent_id"] == agent_id and item["owner_run_id"] == run_id
+                owner_live = self._owner_live(conn, item["owner_agent_id"], item["owner_run_id"], timestamp)
+                if is_owner:
+                    result.append(self._with_visibility(item, viewer_agent_id=agent_id, viewer_run_id=run_id, timestamp=timestamp, owner_live=owner_live))
+                elif item["context_state"] == "released":
+                    result.append({**item, "visibility": "released", "owner_live": owner_live})
+                elif not owner_live:
+                    result.append({**item, "visibility": "reclaimable", "owner_live": False})
             return result
 
     def continuation_state(self, *, agent_id: str, run_id: str, surface: str | None = None) -> dict[str, Any]:
@@ -326,7 +369,9 @@ class HypothesisLedger:
                 owner_run_id TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
-                completed_at REAL
+                completed_at REAL,
+                lead_id TEXT,
+                context_state TEXT NOT NULL DEFAULT 'private'
             );
             CREATE INDEX IF NOT EXISTS idx_hypotheses_owner ON hypotheses(owner_agent_id, owner_run_id, status);
             CREATE INDEX IF NOT EXISTS idx_hypotheses_url ON hypotheses(url, surface, status);
@@ -341,6 +386,12 @@ class HypothesisLedger:
             );
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(hypotheses)")}
+        if "lead_id" not in columns:
+            conn.execute("ALTER TABLE hypotheses ADD COLUMN lead_id TEXT")
+        if "context_state" not in columns:
+            conn.execute("ALTER TABLE hypotheses ADD COLUMN context_state TEXT NOT NULL DEFAULT 'private'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hypotheses_lead ON hypotheses(lead_id, status)")
         ensure_heartbeat_schema(conn)
         self._migrate_legacy_heartbeats(conn)
 
@@ -424,6 +475,8 @@ def _row_payload(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"], "parent_id": row["parent_id"], "title": row["title"], "surface": row["surface"],
         "url": row["url"], "tags": json.loads(row["tags_json"]), "expected_chain": row["expected_chain"],
         "next_discriminator": row["next_discriminator"], "evidence_refs": json.loads(row["evidence_refs_json"]),
+        "lead_id": row["lead_id"] if "lead_id" in row.keys() else None,
+        "context_state": row["context_state"] if "context_state" in row.keys() else "private",
         "status": row["status"], "owner_agent_id": row["owner_agent_id"], "owner_run_id": row["owner_run_id"],
         "created_at": row["created_at"], "updated_at": row["updated_at"], "completed_at": row["completed_at"],
     }

@@ -5,7 +5,7 @@ import sqlite3
 from bounty_core.hypothesis_ledger import HypothesisLedger
 
 
-def test_creator_private_hypotheses_are_hidden_until_owner_stales(tmp_path):
+def test_private_hypotheses_remain_hidden_until_linked_lead_followup_after_owner_stales(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger(
         "demo",
@@ -22,16 +22,42 @@ def test_creator_private_hypotheses_are_hidden_until_owner_stales(tmp_path):
         url="https://App.Example/export/?b=2&a=1",
         surface="export",
         tags=["pdf", "worker", "signed-url"],
+        lead_id="L-export",
     )
 
     assert ledger.list_visible(agent_id="agent-a", run_id="run-a") == [created]
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
 
     now[0] += 2 * 60 * 60 + 1
-    reclaimable = ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")
+    reclaimable = ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")
     assert [item["id"] for item in reclaimable] == [created["id"]]
     assert reclaimable[0]["visibility"] == "reclaimable"
     assert reclaimable[0]["url"] == "https://app.example/export?a=1&b=2"
+
+
+def test_lead_followup_reveals_only_released_linked_context(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    released = ledger.create(agent_id="agent-a", run_id="run-a", title="Lead branch", surface="export", tags=["worker"], lead_id="L-export")
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Private branch", surface="export", tags=["worker"], lead_id="L-export")
+
+    ledger.release(released["id"], agent_id="agent-a", run_id="run-a")
+
+    visible = ledger.lead_followup(agent_id="agent-b", run_id="run-b", lead_id="L-export")
+    assert [(item["id"], item["visibility"]) for item in visible] == [(released["id"], "released")]
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
+
+
+def test_release_rejects_unlinked_or_non_owner_hypotheses(tmp_path):
+    import pytest
+
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    unlinked = ledger.create(agent_id="agent-a", run_id="run-a", title="Unlinked", surface="export", tags=[])
+    linked = ledger.create(agent_id="agent-a", run_id="run-a", title="Linked", surface="export", tags=[], lead_id="L-export")
+
+    with pytest.raises(ValueError, match="lead-linked"):
+        ledger.release(unlinked["id"], agent_id="agent-a", run_id="run-a")
+    with pytest.raises(PermissionError, match="current owner"):
+        ledger.release(linked["id"], agent_id="agent-b", run_id="run-b")
 
 
 def test_owner_heartbeat_keeps_untouched_private_backlog_private(tmp_path):
@@ -157,20 +183,62 @@ def test_child_creation_requires_live_ownership_of_the_parent(tmp_path):
         ledger.create(agent_id="agent-b", run_id="run-b", title="Unauthorized child", surface="export", tags=["worker"], parent_id=parent["id"])
 
 
-def test_non_owner_recovery_requires_an_explicit_scope_filter(tmp_path):
+def test_non_owner_discovery_never_exposes_stale_hypotheses(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)
-    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"])
+    ledger.create(agent_id="agent-a", run_id="run-a", title="Export worker", surface="export", tags=["worker"], lead_id="L-export")
     now[0] += 11
 
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b") == []
-    assert len(ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export")) == 1
+    assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
 
 
 def test_fractional_ttl_is_rejected(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="positive integer"):
         HypothesisLedger("demo", root_override=tmp_path, ttl_seconds=0.5)
+
+
+def test_legacy_hypotheses_migrate_before_lead_index_creation_and_preserve_rows(tmp_path):
+    ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: 2_000.0)
+    ledger.root.mkdir(parents=True)
+    with sqlite3.connect(ledger.db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE hypotheses (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT REFERENCES hypotheses(id),
+                title TEXT NOT NULL,
+                surface TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL,
+                expected_chain TEXT,
+                next_discriminator TEXT,
+                evidence_refs_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                owner_agent_id TEXT NOT NULL,
+                owner_run_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                completed_at REAL
+            );
+            INSERT INTO hypotheses VALUES (
+                'H-legacy', NULL, 'Legacy private branch', 'export', '', '[]', NULL,
+                NULL, '[]', 'candidate', 'agent-a', 'run-a', 1.0, 1.0, NULL
+            );
+            """
+        )
+
+    visible = ledger.list_visible(agent_id="agent-a", run_id="run-a")
+
+    assert [item["id"] for item in visible] == ["H-legacy"]
+    assert visible[0]["lead_id"] is None
+    assert visible[0]["context_state"] == "private"
+    with sqlite3.connect(ledger.db_path) as conn:
+        assert {row[1] for row in conn.execute("PRAGMA table_info(hypotheses)")} >= {"lead_id", "context_state"}
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_hypotheses_lead'").fetchone()
+
+    assert ledger.list_visible(agent_id="agent-a", run_id="run-a")[0]["id"] == "H-legacy"
 
 
 def test_legacy_hypothesis_heartbeats_migrate_to_the_core_namespace(tmp_path):
