@@ -47,6 +47,19 @@ def test_lead_followup_reveals_only_released_linked_context(tmp_path):
     assert ledger.list_visible(agent_id="agent-b", run_id="run-b", surface="export") == []
 
 
+def test_release_rejects_unlinked_or_non_owner_hypotheses(tmp_path):
+    import pytest
+
+    ledger = HypothesisLedger("demo", root_override=tmp_path)
+    unlinked = ledger.create(agent_id="agent-a", run_id="run-a", title="Unlinked", surface="export", tags=[])
+    linked = ledger.create(agent_id="agent-a", run_id="run-a", title="Linked", surface="export", tags=[], lead_id="L-export")
+
+    with pytest.raises(ValueError, match="lead-linked"):
+        ledger.release(unlinked["id"], agent_id="agent-a", run_id="run-a")
+    with pytest.raises(PermissionError, match="current owner"):
+        ledger.release(linked["id"], agent_id="agent-b", run_id="run-b")
+
+
 def test_owner_heartbeat_keeps_untouched_private_backlog_private(tmp_path):
     now = [1_000.0]
     ledger = HypothesisLedger("demo", root_override=tmp_path, now=lambda: now[0], ttl_seconds=10)

@@ -16,7 +16,7 @@ Add a lead-linked, explicit follow-up retrieval path while keeping ordinary hypo
 - Existing SQLite databases receive additive migration columns.
 
 ## Evidence
-- `uv run --with pytest python -m pytest tests/test_hypothesis_ledger.py -q` — 14 passed.
+- `uv run --with pytest python -m pytest tests/test_hypothesis_ledger.py -q` — 15 passed.
 - `git diff --check` passed before this checkpoint.
 
 ## Remaining work
