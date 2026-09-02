@@ -154,6 +154,7 @@ class HypothesisLedger:
         required_tags = set(_tags(tags))
         normalized_url = normalize_url(url or "")
         requested_statuses = {_status(item) for item in statuses} if statuses is not None else UNRESOLVED_STATUSES
+        has_scope_filter = bool(normalized_url or surface or required_tags)
         with self._connection() as conn:
             self._init(conn)
             rows = conn.execute("SELECT * FROM hypotheses WHERE status IN ({}) ORDER BY created_at, id".format(",".join("?" for _ in requested_statuses)), tuple(sorted(requested_statuses))).fetchall()
@@ -162,7 +163,9 @@ class HypothesisLedger:
                 item = _row_payload(row)
                 owner_live = self._owner_live(conn, item["owner_agent_id"], item["owner_run_id"], timestamp)
                 is_owner = item["owner_agent_id"] == agent_id and item["owner_run_id"] == run_id
-                if item["owner_agent_id"] != agent_id or item["owner_run_id"] != run_id:
+                if not is_owner and (
+                    not has_scope_filter or owner_live or item["status"] not in UNRESOLVED_STATUSES
+                ):
                     continue
                 if normalized_url and item["url"] != normalized_url:
                     continue
