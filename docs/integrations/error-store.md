@@ -32,8 +32,10 @@ MapStore facts, private hypotheses, or findings.
 - RED: `python3 -m pytest tests/test_error_store.py -q` failed because
   `bounty_core.error_store` did not exist.
 - RED: importing `ErrorStore` from the public package failed before export.
-- GREEN: `python3 -m pytest tests/test_error_store.py tests/test_evidence.py -q`
-  passed with 10 tests.
+- GREEN: `PYTHONPATH=. python3 -m pytest tests -q` passed with 113 tests.
+- Review repair: free-text bearer credentials are now redacted before persistence;
+  `tests/test_error_store.py::test_record_redacts_bearer_credentials_in_free_text_fields`
+  was observed RED then GREEN.
 
 ## Activation boundary
 
@@ -44,5 +46,6 @@ beta integration.
 
 ## Resume point
 
-Run the full Core test suite and review the implementation; then commit this
-feature. Build BBH's wrapper only against the resulting immutable Core commit.
+Re-review the bearer-redaction repair and run the full isolated Core suite. If
+accepted, merge the feature to Core `beta`, then update BBH's immutable Core pin
+and run its focused wrapper test against that exact beta commit.

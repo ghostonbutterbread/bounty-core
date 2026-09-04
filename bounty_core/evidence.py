@@ -27,9 +27,10 @@ _SENSITIVE_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 _SENSITIVE_VALUE_RE = re.compile(
-    r"(?P<prefix>\b(?:authorization|password|session(?:_id)?|cookie|(?:access_)?token|secret|api(?:_|-)?key|apikey)\s*(?:=|:)\s*)[^\s;,&\"']+",
+    r"(?P<prefix>\b(?:authorization|password|session(?:_id)?|cookie|(?:access_)?token|secret|api(?:_|-)?key|apikey)\s*(?:=|:)\s*)(?:Bearer\s+)?[^\s;,&\"']+",
     re.IGNORECASE,
 )
+_BEARER_TOKEN_RE = re.compile(r"(?P<prefix>\bBearer\s+)[^\s;,&\"']+", re.IGNORECASE)
 
 
 def utc_timestamp() -> str:
@@ -109,7 +110,8 @@ def redact_event_value(value: Any, *, key: str = "") -> Any:
         return [redact_event_value(item) for item in value]
     if isinstance(value, str):
         value = _SENSITIVE_QUERY_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
-        return _SENSITIVE_VALUE_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
+        value = _SENSITIVE_VALUE_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
+        return _BEARER_TOKEN_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
     return value
 
 
