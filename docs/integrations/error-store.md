@@ -37,15 +37,16 @@ MapStore facts, private hypotheses, or findings.
   `tests/test_error_store.py::test_record_redacts_bearer_credentials_in_free_text_fields`
   was observed RED then GREEN.
 
-## Activation boundary
+## Activation decision
 
-This commit adds the Core primitive only. It does not create runtime traffic or
-activate a BBH agent. BBH integration must pin the reviewed immutable Core
-commit, add its wrapper/tests/skill update, and pass independent review before
-beta integration.
+Independent re-review accepted repair commit
+`75cbcc6193f5070052e30a12de214d9e2b5b1904`: bearer credentials are absent from
+returned events and persisted JSONL, and the isolated full Core suite passed
+(`113 passed`). The Core feature is approved for merge into `beta`; BBH must pin
+the resulting immutable Core beta commit before its own review/integration.
 
 ## Resume point
 
-Re-review the bearer-redaction repair and run the full isolated Core suite. If
-accepted, merge the feature to Core `beta`, then update BBH's immutable Core pin
-and run its focused wrapper test against that exact beta commit.
+Merge this clean reviewed feature into Core `beta`, test and push Core beta, then
+update BBH's immutable Core pin to the resulting beta ref and re-run its focused
+wrapper test.
