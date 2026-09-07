@@ -1,5 +1,6 @@
 """Shared bug bounty storage, ledger, report, and index helpers."""
 
+from .blocker_store import BlockerStore
 from .evidence import append_event, read_events, redact_event_value, utc_timestamp, validate_event
 from .error_store import ErrorStore
 from .finding import normalize_finding
@@ -15,6 +16,7 @@ from .reports import canonical_finalized_report_path, canonical_finding_report_d
 from .storage import StorageLayout, resolve_family_lane, resolve_storage
 
 __all__ = [
+    "BlockerStore",
     "ErrorStore",
     "ReconRun",
     "StorageLayout",
