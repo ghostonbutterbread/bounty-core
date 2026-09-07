@@ -31,6 +31,7 @@ _SENSITIVE_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _BEARER_TOKEN_RE = re.compile(r"(?P<prefix>\bBearer\s+)[^\s;,&\"']+", re.IGNORECASE)
+_URL_USERINFO_RE = re.compile(r"(?P<prefix>\b[a-z][a-z0-9+.-]*://)[^/?#\s@]*@", re.IGNORECASE)
 
 
 def utc_timestamp() -> str:
@@ -109,6 +110,7 @@ def redact_event_value(value: Any, *, key: str = "") -> Any:
     if isinstance(value, (list, tuple)):
         return [redact_event_value(item) for item in value]
     if isinstance(value, str):
+        value = _URL_USERINFO_RE.sub(lambda match: f"{match.group('prefix')}REDACTED@", value)
         value = _SENSITIVE_QUERY_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
         value = _SENSITIVE_VALUE_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
         return _BEARER_TOKEN_RE.sub(lambda match: f"{match.group('prefix')}REDACTED", value)
