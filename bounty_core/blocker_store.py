@@ -55,6 +55,7 @@ class BlockerStore:
         self,
         *,
         producer: str,
+        run_id: str,
         subject: str,
         test_scope: str,
         blocker_key: str,
@@ -79,6 +80,7 @@ class BlockerStore:
             "blocker_id": f"B-{uuid4().hex}",
             "timestamp": utc_timestamp(),
             "producer": _required(producer, "producer"),
+            "run_id": _required(run_id, "run_id"),
             "subject": _required(subject, "subject"),
             "test_scope": _required(test_scope, "test_scope"),
             "blocker_key": _required(blocker_key, "blocker_key"),
@@ -126,7 +128,14 @@ class BlockerStore:
                 break
         return matches
 
-    def active(self, *, subject: str | None = None, test_scope: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def active(
+        self,
+        *,
+        subject: str | None = None,
+        test_scope: str | None = None,
+        run_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
         """Return latest open event for each stable blocker key, bounded at read time."""
         if limit < 0:
             raise ValueError("limit must be non-negative")
@@ -145,16 +154,19 @@ class BlockerStore:
             if test_scope is not None and row["test_scope"] != test_scope:
                 continue
             latest[row["blocker_key"]] = row
-        return [row for row in latest.values() if row["lifecycle"] == "open"][:limit]
+        return [
+            row for row in latest.values()
+            if row["lifecycle"] == "open" and (run_id is None or row.get("run_id") == run_id)
+        ][:limit]
 
-    def coverage_gate(self, *, subject: str, test_scope: str) -> dict[str, Any]:
-        """State whether the named coverage claim is currently blocked."""
-        blockers = self.active(subject=subject, test_scope=test_scope)
+    def brief(self, *, run_id: str, limit: int = 100) -> dict[str, Any]:
+        """Return a compact completion receipt for blockers still open from one run."""
+        normalized_run_id = _required(run_id, "run_id")
+        blockers = self.active(run_id=normalized_run_id, limit=limit)
         return {
-            "subject": subject,
-            "test_scope": test_scope,
-            "coverage_state": "blocked" if blockers else "unblocked",
-            "blockers": blockers,
+            "run_id": normalized_run_id,
+            "open_blocker_count": len(blockers),
+            "open_blockers": blockers,
         }
 
 
@@ -182,6 +194,9 @@ def _choice(value: str, name: str, allowed: set[str]) -> str:
 
 
 def _is_valid(row: Mapping[str, Any]) -> bool:
+    # Released schema-v1 blocker records did not include run_id. Keep them in
+    # general lookup/lifecycle reads, but they cannot be attributed to a later
+    # completion brief. New records always carry run_id.
     required = ("blocker_id", "timestamp", "producer", "subject", "test_scope", "blocker_key", "blocker_type", "reason", "lifecycle")
     return (
         all(str(row.get(field) or "").strip() for field in required)
