@@ -1,6 +1,7 @@
 # Run-scoped blocker briefs
 
 - **Objective:** generalize blockers beyond BOLA as an optional external-prerequisite handoff.
+- **Implementation commit:** `205cc74c5952397fbb96116892cb67bc6db1c74e`
 - **Branch:** `feat/blocker-run-brief`
 - **Base / target:** `beta` at `ee266ad` → `beta`
 
