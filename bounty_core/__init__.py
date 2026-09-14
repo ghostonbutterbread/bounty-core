@@ -4,6 +4,7 @@ from .blocker_store import BlockerStore
 from .evidence import append_event, read_events, redact_event_value, utc_timestamp, validate_event
 from .error_store import ErrorStore
 from .finding import normalize_finding
+from .public_artifact_store import PublicArtifactStore
 from .ledger import (
     add_finding,
     get_finding,
@@ -18,6 +19,7 @@ from .storage import StorageLayout, resolve_family_lane, resolve_storage
 __all__ = [
     "BlockerStore",
     "ErrorStore",
+    "PublicArtifactStore",
     "ReconRun",
     "StorageLayout",
     "append_event",
