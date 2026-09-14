@@ -157,9 +157,7 @@ def _validate_transition(event: str, visibility: str, latest: Mapping[str, Any] 
     if prior_event == "cleanup_pending":
         if event == "deleted":
             return
-        if event == "visibility_changed" and visibility == "private":
-            return
-        raise ValueError("cleanup_pending permits only deletion or a private visibility change")
+        raise ValueError("cleanup_pending permits only deletion")
     if event == "cleanup_verified":
         raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
 

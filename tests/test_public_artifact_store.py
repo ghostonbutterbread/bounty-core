@@ -100,19 +100,9 @@ def test_cleanup_pending_is_not_reusable_and_cleanup_verification_requires_its_d
         )
 
 
-def test_cleanup_state_cannot_be_revived_except_by_making_the_artifact_private(tmp_path):
+def test_cleanup_state_cannot_be_revived_and_private_visibility_is_set_before_cleanup(tmp_path):
     store = PublicArtifactStore("community-signal", root_override=tmp_path)
     created = create(store)
-    store.record(
-        event="cleanup_pending", producer="public-artifacts", artifact_id=created["artifact_id"],
-        account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
-        visibility="public", cleanup_method="delete",
-    )
-    with pytest.raises(ValueError, match="cleanup_pending"):
-        store.record(
-            event="updated", producer="public-artifacts", artifact_id=created["artifact_id"],
-            account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
-        )
     private = store.record(
         event="visibility_changed", producer="public-artifacts", artifact_id=created["artifact_id"],
         account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"], visibility="private",
@@ -122,6 +112,12 @@ def test_cleanup_state_cannot_be_revived_except_by_making_the_artifact_private(t
         event="cleanup_pending", producer="public-artifacts", artifact_id=created["artifact_id"],
         account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"], visibility="private",
     )
+    for event, visibility in (("updated", "private"), ("visibility_changed", "public")):
+        with pytest.raises(ValueError, match="cleanup_pending"):
+            store.record(
+                event=event, producer="public-artifacts", artifact_id=created["artifact_id"],
+                account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"], visibility=visibility,
+            )
     deleted = store.record(
         event="deleted", producer="public-artifacts", artifact_id=created["artifact_id"],
         account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"], visibility="private",
