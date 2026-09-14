@@ -51,6 +51,16 @@ def test_current_returns_one_latest_reusable_artifact_and_keeps_cleanup_history(
         cleanup_method="delete",
     )
     store.record(
+        event="deleted",
+        producer="public-artifacts",
+        artifact_id=created["artifact_id"],
+        account_ref=created["account_ref"],
+        artifact_kind=created["artifact_kind"],
+        url=created["url"],
+        visibility="private",
+        cleanup_method="delete",
+    )
+    store.record(
         event="cleanup_verified",
         producer="public-artifacts",
         artifact_id=created["artifact_id"],
@@ -67,9 +77,32 @@ def test_current_returns_one_latest_reusable_artifact_and_keeps_cleanup_history(
     assert store.current(include_cleaned=True)[0]["event"] == "cleanup_verified"
 
 
+def test_cleanup_pending_is_not_reusable_and_cleanup_verification_requires_its_deleted_artifact(tmp_path):
+    store = PublicArtifactStore("community-signal", root_override=tmp_path)
+    created = create(store)
+    with pytest.raises(ValueError, match="artifact_id"):
+        store.record(
+            event="cleanup_verified", producer="public-artifacts", account_ref=created["account_ref"],
+            artifact_kind=created["artifact_kind"], url=created["url"], cleanup_verified=True,
+        )
+    store.record(
+        event="cleanup_pending", producer="public-artifacts", artifact_id=created["artifact_id"],
+        account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
+        visibility="public", cleanup_method="delete",
+    )
+
+    assert store.current() == []
+    with pytest.raises(ValueError, match="prior deleted"):
+        store.record(
+            event="cleanup_verified", producer="public-artifacts", artifact_id=created["artifact_id"],
+            account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
+            cleanup_verified=True,
+        )
+
+
 def test_lifecycle_validation_rejects_unverified_cleanup_and_credential_bearing_values_are_redacted(tmp_path):
     store = PublicArtifactStore("community-signal", root_override=tmp_path)
-    with pytest.raises(ValueError, match="cleanup_verified"):
+    with pytest.raises(ValueError, match="artifact_id"):
         store.record(
             event="cleanup_verified", producer="public-artifacts", account_ref="owner",
             artifact_kind="post", url="https://alice:secret@example.test/post/1",
@@ -77,10 +110,10 @@ def test_lifecycle_validation_rejects_unverified_cleanup_and_credential_bearing_
 
     event = store.record(
         event="created", producer="public-artifacts", account_ref="owner",
-        artifact_kind="post", url="https://alice:secret@example.test/post/1", visibility="private",
+        artifact_kind="post", url="https://alice:secret@example.test/post/1?client_secret=do-not-store", visibility="private",
         purpose="Bearer do-not-store",
     )
     serialized = json.dumps(event)
-    assert "secret" not in serialized
+    assert "alice" not in serialized
     assert "do-not-store" not in serialized
-    assert event["url"] == "https://REDACTED@example.test/post/1"
+    assert event["url"] == "https://REDACTED@example.test/post/1?client_secret=REDACTED"

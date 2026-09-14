@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 from uuid import uuid4
 
 from .evidence import redact_event_value, utc_timestamp
@@ -21,6 +22,7 @@ from .storage import normalize_family, normalize_lane, normalize_program, resolv
 SCHEMA_VERSION = 1
 VALID_EVENTS = {"created", "updated", "visibility_changed", "cleanup_pending", "deleted", "cleanup_verified"}
 VALID_VISIBILITIES = {"private", "unlisted", "community", "public", "unknown"}
+SENSITIVE_QUERY_KEYS = {"access_token", "api_key", "apikey", "client_secret", "code", "password", "secret", "token"}
 
 
 class PublicArtifactStore:
@@ -62,20 +64,27 @@ class PublicArtifactStore:
         """Append one redacted lifecycle event for an owned test artifact."""
         normalized_event = _choice(event, "event", VALID_EVENTS)
         normalized_visibility = _choice(visibility, "visibility", VALID_VISIBILITIES)
+        supplied_artifact_id = _optional(artifact_id)
+        if normalized_event != "created" and not supplied_artifact_id:
+            raise ValueError("artifact_id is required for lifecycle events after creation")
         if normalized_event == "cleanup_verified" and not cleanup_verified:
             raise ValueError("cleanup_verified must be true for cleanup_verified events")
         if cleanup_verified and normalized_event not in {"deleted", "cleanup_verified"}:
             raise ValueError("cleanup_verified is only valid after deletion or cleanup verification")
+        if normalized_event == "cleanup_verified":
+            latest = self._latest(supplied_artifact_id)
+            if latest is None or latest["event"] != "deleted":
+                raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
         row = {
             "schema_version": SCHEMA_VERSION,
             "event_id": f"PAE-{uuid4().hex}",
-            "artifact_id": _optional(artifact_id) or f"PA-{uuid4().hex}",
+            "artifact_id": supplied_artifact_id or f"PA-{uuid4().hex}",
             "timestamp": utc_timestamp(),
             "event": normalized_event,
             "producer": _required(producer, "producer"),
             "account_ref": _required(account_ref, "account_ref"),
             "artifact_kind": _required(artifact_kind, "artifact_kind"),
-            "url": _required(url, "url"),
+            "url": _redact_artifact_url(_required(url, "url")),
             "object_id": _optional(object_id),
             "visibility": normalized_visibility,
             "purpose": _optional(purpose),
@@ -96,6 +105,15 @@ class PublicArtifactStore:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         return stored
 
+    def _latest(self, artifact_id: str | None) -> dict[str, Any] | None:
+        if not artifact_id or not self.events_path.exists():
+            return None
+        latest: dict[str, Any] | None = None
+        for row in _rows(self.events_path):
+            if row["artifact_id"] == artifact_id:
+                latest = row
+        return latest
+
     def query(self, *, where: Mapping[str, Any] | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """Return bounded valid events matching exact top-level fields."""
         if limit < 0:
@@ -112,7 +130,7 @@ class PublicArtifactStore:
         return matches
 
     def current(self, *, include_cleaned: bool = False, limit: int = 100) -> list[dict[str, Any]]:
-        """Return latest lifecycle state per artifact, preferring reusable artifacts."""
+        """Return latest lifecycle state per artifact, excluding pending cleanup by default."""
         if limit < 0:
             raise ValueError("limit must be non-negative")
         latest: dict[str, dict[str, Any]] = {}
@@ -122,7 +140,7 @@ class PublicArtifactStore:
             latest[row["artifact_id"]] = row
         records = list(latest.values())
         if not include_cleaned:
-            records = [row for row in records if row["event"] not in {"deleted", "cleanup_verified"}]
+            records = [row for row in records if row["event"] not in {"cleanup_pending", "deleted", "cleanup_verified"}]
         return records[:limit]
 
 
@@ -155,6 +173,21 @@ def _choice(value: str, name: str, allowed: set[str]) -> str:
     if normalized not in allowed:
         raise ValueError(f"invalid {name}: {value!r}; use one of: {', '.join(sorted(allowed))}")
     return normalized
+
+
+def _redact_artifact_url(value: str) -> str:
+    """Remove sensitive query values before a URL is persisted."""
+    parsed = urlsplit(value)
+    if not parsed.query:
+        return value
+    query_parts: list[str] = []
+    for item in parsed.query.split("&"):
+        key, separator, _raw_value = item.partition("=")
+        if unquote_plus(key).lower() in SENSITIVE_QUERY_KEYS:
+            query_parts.append(f"{key}=REDACTED" if separator else key)
+        else:
+            query_parts.append(item)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "&".join(query_parts), parsed.fragment))
 
 
 def _is_valid(row: Mapping[str, Any]) -> bool:
