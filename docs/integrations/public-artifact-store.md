@@ -14,9 +14,10 @@ Provide a generic, lane-scoped Bounty Core registry for non-secret owned public-
 
 ## Evidence
 
-- **Implementation checkpoint:** `d54c9677c5850ed7f3983b3bba71603da69f3712`; the current branch tip will add this dossier-only handoff commit.
-- `python3 -m pytest -q tests/test_public_artifact_store.py` — 3 passed.
-- `python3 -m pytest -q` — 122 passed.
+- **Implementation checkpoints:** `d54c9677c5850ed7f3983b3bba71603da69f3712` (initial store) and `084c18c` (review-blocker fixes); the current branch tip will add this dossier-only handoff commit.
+- **Independent review:** initial review requested changes for query-secret redaction, cleanup lifecycle binding, and reusable-state filtering; all three have regression coverage in `tests/test_public_artifact_store.py`.
+- `python3 -m pytest -q tests/test_public_artifact_store.py` — 4 passed.
+- `python3 -m pytest -q` — 123 passed.
 - `git diff --check` — passed.
 
 ## Consumer handoff
