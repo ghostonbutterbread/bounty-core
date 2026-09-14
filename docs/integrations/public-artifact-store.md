@@ -14,8 +14,8 @@ Provide a generic, lane-scoped Bounty Core registry for non-secret owned public-
 
 ## Evidence
 
-- **Implementation checkpoints:** `d54c9677c5850ed7f3983b3bba71603da69f3712` (initial store), `084c18c9caf91b85c1a6ebf0870407f8244582de` (first review-blocker fixes), and `d46ccaaf8a822088be4fd995ae7908e24c9358bc` (second review-blocker fixes); the current branch tip will add this dossier-only handoff commit.
-- **Independent review:** the first review requested query-secret redaction, cleanup lifecycle binding, and reusable-state filtering; the second found state revival after pending/deletion and bracketed query-key redaction. All five issues now have regression coverage in `tests/test_public_artifact_store.py`.
+- **Implementation checkpoints:** `d54c9677c5850ed7f3983b3bba71603da69f3712` (initial store), `084c18c9caf91b85c1a6ebf0870407f8244582de` (first review-blocker fixes), `d46ccaaf8a822088be4fd995ae7908e24c9358bc` (second review-blocker fixes), and `de0195266561cd9c4db280d5bfc8ee09de572e1a` (final cleanup-state fix); the current branch tip will add this dossier-only handoff commit.
+- **Independent review:** the first review requested query-secret redaction, cleanup lifecycle binding, and reusable-state filtering; the second found state revival after pending/deletion and bracketed query-key redaction; the third found a private cleanup transition could later be made public. All six issues now have regression coverage in `tests/test_public_artifact_store.py`.
 - `python3 -m pytest -q tests/test_public_artifact_store.py` — 6 passed.
 - `python3 -m pytest -q` — 125 passed.
 - `git diff --check` — passed.
