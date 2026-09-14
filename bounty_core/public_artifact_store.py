@@ -67,14 +67,12 @@ class PublicArtifactStore:
         supplied_artifact_id = _optional(artifact_id)
         if normalized_event != "created" and not supplied_artifact_id:
             raise ValueError("artifact_id is required for lifecycle events after creation")
+        latest = self._latest(supplied_artifact_id)
+        _validate_transition(normalized_event, normalized_visibility, latest)
         if normalized_event == "cleanup_verified" and not cleanup_verified:
             raise ValueError("cleanup_verified must be true for cleanup_verified events")
         if cleanup_verified and normalized_event not in {"deleted", "cleanup_verified"}:
             raise ValueError("cleanup_verified is only valid after deletion or cleanup verification")
-        if normalized_event == "cleanup_verified":
-            latest = self._latest(supplied_artifact_id)
-            if latest is None or latest["event"] != "deleted":
-                raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
         row = {
             "schema_version": SCHEMA_VERSION,
             "event_id": f"PAE-{uuid4().hex}",
@@ -144,6 +142,28 @@ class PublicArtifactStore:
         return records[:limit]
 
 
+def _validate_transition(event: str, visibility: str, latest: Mapping[str, Any] | None) -> None:
+    if event == "created":
+        if latest is not None:
+            raise ValueError("created events cannot reuse an existing artifact_id")
+        return
+    if latest is None:
+        raise ValueError("lifecycle events require a prior created artifact")
+    prior_event = str(latest["event"])
+    if prior_event in {"deleted", "cleanup_verified"}:
+        if event != "cleanup_verified" or prior_event != "deleted":
+            raise ValueError(f"{prior_event} is terminal for this artifact")
+        return
+    if prior_event == "cleanup_pending":
+        if event == "deleted":
+            return
+        if event == "visibility_changed" and visibility == "private":
+            return
+        raise ValueError("cleanup_pending permits only deletion or a private visibility change")
+    if event == "cleanup_verified":
+        raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
+
+
 def _rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -183,7 +203,9 @@ def _redact_artifact_url(value: str) -> str:
     query_parts: list[str] = []
     for item in parsed.query.split("&"):
         key, separator, _raw_value = item.partition("=")
-        if unquote_plus(key).lower() in SENSITIVE_QUERY_KEYS:
+        decoded_key = unquote_plus(key).lower()
+        base_key = decoded_key.split("[", 1)[0]
+        if base_key in SENSITIVE_QUERY_KEYS:
             query_parts.append(f"{key}=REDACTED" if separator else key)
         else:
             query_parts.append(item)
