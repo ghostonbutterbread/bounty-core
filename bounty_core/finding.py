@@ -26,6 +26,7 @@ def normalize_severity(value: Any) -> str:
     if severity in SEVERITY_ORDER:
         return severity
     aliases = {
+        "P0": "CRITICAL",
         "P1": "CRITICAL",
         "P2": "HIGH",
         "P3": "MEDIUM",
