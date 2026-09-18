@@ -29,11 +29,11 @@ CATEGORIES_DIRNAME = "categories"
 SEVERITY_DIRNAME = "severity"
 LIFECYCLE_BUCKETS = ("active", "dormant", "confirmed", "completed")
 DAILY_VIEW_BUCKETS = ("active", "confirmed", "dormant", "novel", "completed")
-SEVERITY_GROUPS = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
+SEVERITY_GROUPS = ("EXCEPTIONAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 SEVERITY_VIEW_BUCKETS = ("high", "medium", "low")
 NAV_ALIASES_KEY = "_navigation_aliases"
 LIFECYCLE_PRIORITY = {"confirmed": 0, "active": 1, "dormant": 2, "completed": 3}
-SEVERITY_PRIORITY = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
+SEVERITY_PRIORITY = {"EXCEPTIONAL": 0, "CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4, "INFO": 5, "UNKNOWN": 6}
 
 
 def _short(value: Any, limit: int = 160) -> str:
@@ -416,7 +416,7 @@ def _severity_label_for(finding: dict[str, Any]) -> str:
 
 def _severity_group_for(finding: dict[str, Any]) -> str:
     severity = _severity_label_for(finding)
-    if severity in {"CRITICAL", "HIGH"}:
+    if severity in {"EXCEPTIONAL", "CRITICAL", "HIGH"}:
         return "HIGH"
     if severity == "MEDIUM":
         return "MEDIUM"

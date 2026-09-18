@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 VALID_STATUSES = {"raw", "confirmed", "dormant", "novel", "complete", "archive"}
-SEVERITY_ORDER = {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"}
+SEVERITY_ORDER = {"EXCEPTIONAL", "CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"}
 
 
 def utc_now() -> str:
@@ -26,7 +26,7 @@ def normalize_severity(value: Any) -> str:
     if severity in SEVERITY_ORDER:
         return severity
     aliases = {
-        "P0": "CRITICAL",
+        "P0": "EXCEPTIONAL",
         "P1": "CRITICAL",
         "P2": "HIGH",
         "P3": "MEDIUM",

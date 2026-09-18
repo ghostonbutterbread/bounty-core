@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bounty-core"
-version = "0.1.1"
+version = "0.2.0"
 description = "Shared bug bounty storage, ledger, report, and index helpers for Ghost tooling."
 requires-python = ">=3.11"
 
