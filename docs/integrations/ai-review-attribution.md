@@ -19,10 +19,12 @@ evidence, Error, Blocker, Public Artifact, and Hypothesis Ledger writes.
 
 ## Evidence
 
-- Focused provider suite: `48 passed` across evidence, hypothesis, error,
-  blocker, public-artifact, and attribution tests.
-- Syntax/whitespace check: `python3 -m py_compile ...` and `git diff --check`
-  passed.
+- Provider implementation: `03115ffcbb8aeb89b629e36252de6b943cb65f67`.
+- Durable-persistence and legacy-migration regressions: `eb526d2ffa3b67e1e2ccb42d56a1c72ce450e7a6`.
+- Full provider suite: `147 passed`; focused provider suite: `49 passed`.
+- Syntax/whitespace check: `compileall`, `py_compile`, and `git diff --check` passed.
+- Fresh independent review: approved the full `origin/beta...eb526d2` range after
+  rerunning the suite and inspecting JSONL/SQLite readback assertions.
 
 ## Boundaries
 
