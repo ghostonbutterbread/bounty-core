@@ -23,8 +23,9 @@ does not expose the optional field in its returned payload.
 - Focused attribution, ledger, and durable-store suites: `49 passed`.
 - Full provider suite: `147 passed`.
 - `python3 -m compileall -q bounty_core tests` and `git diff --check` passed.
+- Fresh independent review approved `origin/beta...5a54cea5f863bfcf90271a60d944f2ba8c296629` after independently running all `147` tests and a migration/create/read smoke.
 
 ## Next action
 
-Commit this defect fix, obtain independent review, then merge/publish it to
-Bounty Core `beta` before updating the BBH dependency pin.
+Merge this approved fix into Bounty Core `beta`, test and publish the resulting
+immutable revision, then update the BBH dependency pin and release gate.
