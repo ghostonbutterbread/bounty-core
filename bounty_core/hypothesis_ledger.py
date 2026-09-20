@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .heartbeats import ensure_heartbeat_schema, heartbeat_is_live, renew_heartbeat
+from .provenance import AI_REVIEWED_BY_FIELD, merge_ai_reviewers
 from .storage import normalize_family, normalize_lane, normalize_program, resolve_storage
 
 DEFAULT_TTL_SECONDS = 2 * 60 * 60
@@ -72,6 +73,7 @@ class HypothesisLedger:
         evidence_refs: Iterable[str] = (),
         lead_id: str | None = None,
         status: str = "candidate",
+        model_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_status = _status(status)
         if normalized_status not in UNRESOLVED_STATUSES:
@@ -95,6 +97,7 @@ class HypothesisLedger:
             "status": normalized_status,
             "owner_agent_id": _required(agent_id, "agent_id"),
             "owner_run_id": _required(run_id, "run_id"),
+            AI_REVIEWED_BY_FIELD: merge_ai_reviewers(agent_id=agent_id, model_id=model_id),
             "created_at": timestamp,
             "updated_at": timestamp,
             "completed_at": None,
@@ -119,13 +122,13 @@ class HypothesisLedger:
                 INSERT INTO hypotheses(
                     id, parent_id, title, surface, url, tags_json, expected_chain,
                     next_discriminator, evidence_refs_json, lead_id, context_state, status, owner_agent_id,
-                    owner_run_id, created_at, updated_at, completed_at
+                    owner_run_id, ai_reviewed_by_json, created_at, updated_at, completed_at
                 ) VALUES(:id, :parent_id, :title, :surface, :url, :tags_json,
                     :expected_chain, :next_discriminator, :evidence_refs_json,
-                    :lead_id, :context_state, :status, :owner_agent_id, :owner_run_id, :created_at,
-                    :updated_at, :completed_at)
+                    :lead_id, :context_state, :status, :owner_agent_id, :owner_run_id, :ai_reviewed_by_json,
+                    :created_at, :updated_at, :completed_at)
                 """,
-                {**payload, "tags_json": json.dumps(payload["tags"]), "evidence_refs_json": json.dumps(payload["evidence_refs"])},
+                {**payload, "tags_json": json.dumps(payload["tags"]), "evidence_refs_json": json.dumps(payload["evidence_refs"]), "ai_reviewed_by_json": json.dumps(payload[AI_REVIEWED_BY_FIELD])},
             )
             self._event(conn, "created", record_id, agent_id, run_id, timestamp)
             conn.commit()
@@ -447,7 +450,8 @@ class HypothesisLedger:
                 updated_at REAL NOT NULL,
                 completed_at REAL,
                 lead_id TEXT,
-                context_state TEXT NOT NULL DEFAULT 'private'
+                context_state TEXT NOT NULL DEFAULT 'private',
+                ai_reviewed_by_json TEXT NOT NULL DEFAULT '[]'
             );
             CREATE INDEX IF NOT EXISTS idx_hypotheses_owner ON hypotheses(owner_agent_id, owner_run_id, status);
             CREATE INDEX IF NOT EXISTS idx_hypotheses_url ON hypotheses(url, surface, status);
@@ -469,6 +473,8 @@ class HypothesisLedger:
             conn.execute("ALTER TABLE hypotheses ADD COLUMN lead_id TEXT")
         if "context_state" not in columns:
             conn.execute("ALTER TABLE hypotheses ADD COLUMN context_state TEXT NOT NULL DEFAULT 'private'")
+        if "ai_reviewed_by_json" not in columns:
+            conn.execute("ALTER TABLE hypotheses ADD COLUMN ai_reviewed_by_json TEXT NOT NULL DEFAULT '[]'")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_hypotheses_lead ON hypotheses(lead_id, status)")
         ensure_heartbeat_schema(conn)
         self._migrate_legacy_heartbeats(conn)
@@ -555,9 +561,19 @@ def _row_payload(row: sqlite3.Row) -> dict[str, Any]:
         "next_discriminator": row["next_discriminator"], "evidence_refs": json.loads(row["evidence_refs_json"]),
         "lead_id": row["lead_id"] if "lead_id" in row.keys() else None,
         "context_state": row["context_state"] if "context_state" in row.keys() else "private",
+        AI_REVIEWED_BY_FIELD: _reviewers_from_row(row),
         "status": row["status"], "owner_agent_id": row["owner_agent_id"], "owner_run_id": row["owner_run_id"],
         "created_at": row["created_at"], "updated_at": row["updated_at"], "completed_at": row["completed_at"],
     }
+
+
+def _reviewers_from_row(row: sqlite3.Row) -> list[dict[str, str]]:
+    if "ai_reviewed_by_json" not in row.keys():
+        return []
+    try:
+        return merge_ai_reviewers(json.loads(row["ai_reviewed_by_json"] or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        return []
 
 
 def _required(value: str, label: str) -> str:

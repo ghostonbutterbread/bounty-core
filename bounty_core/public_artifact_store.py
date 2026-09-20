@@ -17,6 +17,7 @@ from urllib.parse import unquote_plus, urlsplit, urlunsplit
 from uuid import uuid4
 
 from .evidence import redact_event_value, utc_timestamp
+from .provenance import AI_REVIEWED_BY_FIELD, merge_ai_reviewers
 from .storage import normalize_family, normalize_lane, normalize_program, resolve_storage
 
 SCHEMA_VERSION = 1
@@ -60,6 +61,7 @@ class PublicArtifactStore:
         cleanup_method: str | None = None,
         cleanup_verified: bool = False,
         details: Mapping[str, Any] | None = None,
+        model_id: str | None = None,
     ) -> dict[str, Any]:
         """Append one redacted lifecycle event for an owned test artifact."""
         normalized_event = _choice(event, "event", VALID_EVENTS)
@@ -90,6 +92,9 @@ class PublicArtifactStore:
             "cleanup_verified": bool(cleanup_verified),
             "details": dict(details or {}),
         }
+        reviewers = merge_ai_reviewers(agent_id=producer, model_id=model_id)
+        if reviewers:
+            row[AI_REVIEWED_BY_FIELD] = reviewers
         stored = redact_event_value(row)
         self.root.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(stored, sort_keys=True, separators=(",", ":")) + "\n"

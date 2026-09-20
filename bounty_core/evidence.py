@@ -15,6 +15,8 @@ import re
 from typing import Any, Mapping
 from uuid import uuid4
 
+from .provenance import AI_REVIEWED_BY_FIELD, merge_ai_reviewers
+
 SCHEMA_VERSION = 1
 REQUIRED_EVENT_FIELDS = ("timestamp", "producer", "subject", "outcome", "reason")
 _SECRET_KEY_RE = re.compile(
@@ -48,6 +50,11 @@ def append_event(path: str | Path, event: Mapping[str, Any]) -> dict[str, Any]:
     row.setdefault("schema_version", SCHEMA_VERSION)
     row.setdefault("attempt_id", f"A-{uuid4().hex}")
     row.setdefault("timestamp", utc_timestamp())
+    reviewers = merge_ai_reviewers(row.get(AI_REVIEWED_BY_FIELD))
+    if reviewers:
+        row[AI_REVIEWED_BY_FIELD] = reviewers
+    else:
+        row.pop(AI_REVIEWED_BY_FIELD, None)
     validate_event(row)
     redacted = redact_event_value(row)
 

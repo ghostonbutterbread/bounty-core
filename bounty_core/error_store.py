@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from .evidence import redact_event_value
+from .provenance import AI_REVIEWED_BY_FIELD, merge_ai_reviewers
 from .storage import normalize_family, normalize_lane, normalize_program, resolve_storage
 
 SCHEMA_VERSION = 1
@@ -59,6 +60,7 @@ class ErrorStore:
         reproducibility: str = "observed-once",
         attempt_ref: str | None = None,
         artifact_ref: str | None = None,
+        model_id: str | None = None,
     ) -> dict[str, Any]:
         """Redact and atomically append a single observed error event."""
         normalized_layer = _choice(layer, "layer", VALID_LAYERS)
@@ -82,6 +84,9 @@ class ErrorStore:
             "artifact_ref": _optional(artifact_ref),
             "details": dict(details or {}),
         }
+        reviewers = merge_ai_reviewers(agent_id=producer, model_id=model_id)
+        if reviewers:
+            event[AI_REVIEWED_BY_FIELD] = reviewers
         stored = redact_event_value(event)
         self.root.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(stored, sort_keys=True, separators=(",", ":")) + "\n"
