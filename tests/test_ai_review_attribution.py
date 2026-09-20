@@ -50,9 +50,9 @@ def test_hypothesis_ledger_stores_optional_reviewer_tag_and_preserves_legacy_def
     visible = reloaded.list_visible(agent_id="map-agent", run_id="run-1", surface="api")
     assert visible[0]["id"] == tagged["id"]
     assert visible[0][AI_REVIEWED_BY_FIELD] == EXPECTED
-    legacy_visible = reloaded.list_visible(agent_id="legacy-agent", run_id="run-2", surface="api")
-    assert legacy_visible[0]["id"] == legacy["id"]
-    assert legacy_visible[0][AI_REVIEWED_BY_FIELD] == []
+    legacy_visible = reloaded.list_visible(agent_id="legacy-agent", run_id="run-2", surface="api")[0]
+    assert legacy_visible["id"] == legacy["id"]
+    assert AI_REVIEWED_BY_FIELD not in legacy_visible
 
 
 def test_hypothesis_ledger_migrates_pre_attribution_database_without_backfill(tmp_path) -> None:
@@ -75,8 +75,8 @@ def test_hypothesis_ledger_migrates_pre_attribution_database_without_backfill(tm
         )
 
     migrated = HypothesisLedger("demo", root_override=tmp_path)
-    visible = migrated.list_visible(agent_id="legacy-agent", run_id="run-legacy", surface="api")
-    assert visible[0][AI_REVIEWED_BY_FIELD] == []
+    visible = migrated.list_visible(agent_id="legacy-agent", run_id="run-legacy", surface="api")[0]
+    assert AI_REVIEWED_BY_FIELD not in visible
     with sqlite3.connect(migrated.db_path) as conn:
         columns = {row[1]: row for row in conn.execute("PRAGMA table_info(hypotheses)")}
     assert columns["ai_reviewed_by_json"][4] == "'[]'"
