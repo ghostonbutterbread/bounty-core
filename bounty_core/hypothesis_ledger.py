@@ -82,6 +82,7 @@ class HypothesisLedger:
         surface = _required(surface, "surface")
         timestamp = self._now()
         record_id = f"H-{uuid.uuid4().hex[:12]}"
+        reviewers = merge_ai_reviewers(agent_id=agent_id, model_id=model_id)
         payload = {
             "id": record_id,
             "parent_id": _optional(parent_id),
@@ -97,11 +98,12 @@ class HypothesisLedger:
             "status": normalized_status,
             "owner_agent_id": _required(agent_id, "agent_id"),
             "owner_run_id": _required(run_id, "run_id"),
-            AI_REVIEWED_BY_FIELD: merge_ai_reviewers(agent_id=agent_id, model_id=model_id),
             "created_at": timestamp,
             "updated_at": timestamp,
             "completed_at": None,
         }
+        if reviewers:
+            payload[AI_REVIEWED_BY_FIELD] = reviewers
         with self._connection() as conn:
             self._init(conn)
             conn.execute("BEGIN IMMEDIATE")
@@ -128,7 +130,7 @@ class HypothesisLedger:
                     :lead_id, :context_state, :status, :owner_agent_id, :owner_run_id, :ai_reviewed_by_json,
                     :created_at, :updated_at, :completed_at)
                 """,
-                {**payload, "tags_json": json.dumps(payload["tags"]), "evidence_refs_json": json.dumps(payload["evidence_refs"]), "ai_reviewed_by_json": json.dumps(payload[AI_REVIEWED_BY_FIELD])},
+                {**payload, "tags_json": json.dumps(payload["tags"]), "evidence_refs_json": json.dumps(payload["evidence_refs"]), "ai_reviewed_by_json": json.dumps(reviewers)},
             )
             self._event(conn, "created", record_id, agent_id, run_id, timestamp)
             conn.commit()
@@ -555,16 +557,19 @@ def normalize_url(value: str) -> str:
 
 
 def _row_payload(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    payload = {
         "id": row["id"], "parent_id": row["parent_id"], "title": row["title"], "surface": row["surface"],
         "url": row["url"], "tags": json.loads(row["tags_json"]), "expected_chain": row["expected_chain"],
         "next_discriminator": row["next_discriminator"], "evidence_refs": json.loads(row["evidence_refs_json"]),
         "lead_id": row["lead_id"] if "lead_id" in row.keys() else None,
         "context_state": row["context_state"] if "context_state" in row.keys() else "private",
-        AI_REVIEWED_BY_FIELD: _reviewers_from_row(row),
         "status": row["status"], "owner_agent_id": row["owner_agent_id"], "owner_run_id": row["owner_run_id"],
         "created_at": row["created_at"], "updated_at": row["updated_at"], "completed_at": row["completed_at"],
     }
+    reviewers = _reviewers_from_row(row)
+    if reviewers:
+        payload[AI_REVIEWED_BY_FIELD] = reviewers
+    return payload
 
 
 def _reviewers_from_row(row: sqlite3.Row) -> list[dict[str, str]]:
