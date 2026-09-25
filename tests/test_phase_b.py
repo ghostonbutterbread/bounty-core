@@ -76,7 +76,7 @@ def test_update_finding_preserves_observation_metadata_and_refreshes(tmp_path):
     assert "Reflected XSS on search" in (layout.reports_root / "index" / "confirmed.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" not in (layout.reports_root / "index" / "raw.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" in (layout.reports_root / "confirmed" / "xss" / "index.md").read_text(encoding="utf-8")
-    assert "Reflected XSS on search" not in (layout.reports_root / "raw" / "xss" / "index.md").read_text(encoding="utf-8")
+    assert not (layout.reports_root / "raw" / "xss" / "index.md").exists()
 
 
 def test_unsafe_identity_uses_safe_report_filename_without_changing_identity(tmp_path):

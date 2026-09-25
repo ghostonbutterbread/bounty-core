@@ -18,7 +18,8 @@ After rebuilding generated type/status navigation, remove only generated old typ
 
 - `python3 -m pytest -q tests/test_reports.py tests/test_core_smoke.py`: 33 passed, including colliding daily/category status and retained-type/different-status regressions.
 - New regression changes a finding from a unique obsolete type to a corrected type, checks old generated type indexes removed, new index written, manual nav untouched.
-- Independent review: first review blocked on collisions with daily/category namespaces and a retained-type/different-status view; both corrected with known-status-root scoping and exact status/type pairs. Re-review pending.
+- Full `python3 -m pytest -q`: 150 passed after updating the old test to expect stale generated status/type navigation removal.
+- Independent review: first review blocked on daily/category collision and retained-type/different-status view; both corrected. Second review found a stale test expectation for the now-retired generated view; corrected and full suite passes. Final test-only re-review pending.
 - Merge/ancestry: feature from fetched origin/beta at base above.
 
 ## Blockers / deferred work
