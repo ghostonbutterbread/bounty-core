@@ -397,6 +397,51 @@ def test_refresh_report_indexes_removes_stale_generated_daily_views_after_move(t
     assert "Original daily issue" not in new_text
 
 
+def test_refresh_report_indexes_removes_stale_generated_type_index_after_correction(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D01", title="False claim", type="obsolete-unique-type")
+    refresh_report_indexes(layout, [finding])
+    old_type = layout.reports_root / "index" / "obsolete-unique-type.md"
+    old_nested = layout.reports_root / "dormant" / "obsolete-unique-type" / "index.md"
+    manual = layout.reports_root / "index" / "manual-notes.md"
+    manual.write_text("# Human notes\n", encoding="utf-8")
+    assert "False claim" in old_type.read_text(encoding="utf-8")
+    corrected = _finding(fid="D01", title="Corrected claim", type="corrected-type")
+    refresh_report_indexes(layout, [corrected])
+    assert not old_type.exists()
+    assert not old_nested.exists()
+    assert "Corrected claim" in (layout.reports_root / "index" / "corrected-type.md").read_text(encoding="utf-8")
+    assert manual.read_text(encoding="utf-8") == "# Human notes\n"
+
+
+def test_type_cleanup_preserves_daily_and_category_views_with_colliding_status(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    for status in ("daily", "categories"):
+        normal = _finding(fid="D01", title="Normal", status="dormant", type="xss")
+        collision = _finding(fid="D02", title="Collision", status=status, type="other")
+        refresh_report_indexes(layout, [normal, collision])
+        category_index = layout.reports_root / "categories" / category_report_slug(normal) / "index.md"
+        daily_indexes = list((layout.reports_root / "daily").glob("*/index.md"))
+        assert category_index.exists()
+        assert daily_indexes
+        refresh_report_indexes(layout, [normal, collision])
+        assert category_index.exists()
+        assert all(path.exists() for path in daily_indexes)
+
+
+def test_type_cleanup_removes_old_status_pair_when_type_remains_elsewhere(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    old = _finding(fid="D01", title="Old", status="dormant", type="old-type")
+    other = _finding(fid="D02", title="Other", status="confirmed", type="old-type")
+    refresh_report_indexes(layout, [old, other])
+    old_pair = layout.reports_root / "dormant" / "old-type" / "index.md"
+    assert "Old" in old_pair.read_text(encoding="utf-8")
+    corrected = _finding(fid="D01", title="Corrected", status="dormant", type="new-type")
+    refresh_report_indexes(layout, [corrected, other])
+    assert not old_pair.exists()
+    assert "Other" in (layout.reports_root / "confirmed" / "old-type" / "index.md").read_text(encoding="utf-8")
+
+
 def test_refresh_report_indexes_removes_empty_generated_category_index_after_category_change(tmp_path):
     layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
     finding = _finding(fid="G01", title="Category move")
