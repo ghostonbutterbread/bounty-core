@@ -1,6 +1,6 @@
 # Generated type-index cleanup integration dossier
 
-- **Status:** review-ready
+- **Status:** review-approved (provider beta merge pending)
 - **Owner:** Hermes
 - **Branch / owning ref:** `fix/prune-stale-finding-type-index`
 - **Base commit:** `7b08495f65a50f733fc18213c38cc3ae8e91bdf5`
@@ -19,7 +19,7 @@ After rebuilding generated type/status navigation, remove only generated old typ
 - `python3 -m pytest -q tests/test_reports.py tests/test_core_smoke.py`: 33 passed, including colliding daily/category status and retained-type/different-status regressions.
 - New regression changes a finding from a unique obsolete type to a corrected type, checks old generated type indexes removed, new index written, manual nav untouched.
 - Full `python3 -m pytest -q`: 150 passed after updating the old test to expect stale generated status/type navigation removal.
-- Independent review: first review blocked on daily/category collision and retained-type/different-status view; both corrected. Second review found a stale test expectation for the now-retired generated view; corrected and full suite passes. Final test-only re-review pending.
+- Independent review: first review blocked on daily/category collision and retained-type/different-status view; both corrected. Second review found a stale test expectation; corrected. Final independent review approved `2626a08` after 150-pass full suite and 32-pass phase-B/reports subset.
 - Merge/ancestry: feature from fetched origin/beta at base above.
 
 ## Blockers / deferred work
