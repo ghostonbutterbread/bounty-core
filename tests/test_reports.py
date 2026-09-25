@@ -397,6 +397,23 @@ def test_refresh_report_indexes_removes_stale_generated_daily_views_after_move(t
     assert "Original daily issue" not in new_text
 
 
+def test_refresh_report_indexes_removes_stale_generated_type_index_after_correction(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D01", title="False claim", type="obsolete-unique-type")
+    refresh_report_indexes(layout, [finding])
+    old_type = layout.reports_root / "index" / "obsolete-unique-type.md"
+    old_nested = layout.reports_root / "dormant" / "obsolete-unique-type" / "index.md"
+    manual = layout.reports_root / "index" / "manual-notes.md"
+    manual.write_text("# Human notes\n", encoding="utf-8")
+    assert "False claim" in old_type.read_text(encoding="utf-8")
+    corrected = _finding(fid="D01", title="Corrected claim", type="corrected-type")
+    refresh_report_indexes(layout, [corrected])
+    assert not old_type.exists()
+    assert not old_nested.exists()
+    assert "Corrected claim" in (layout.reports_root / "index" / "corrected-type.md").read_text(encoding="utf-8")
+    assert manual.read_text(encoding="utf-8") == "# Human notes\n"
+
+
 def test_refresh_report_indexes_removes_empty_generated_category_index_after_category_change(tmp_path):
     layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
     finding = _finding(fid="G01", title="Category move")
