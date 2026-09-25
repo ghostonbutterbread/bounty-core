@@ -1129,7 +1129,12 @@ def _legacy_status_type_index_text(status: str, vuln_type: str, items: list[dict
     return f"{REPORT_NAV_GENERATED_MARKER}\n# {status.title()} {vuln_type.upper()}\n\n" + "\n".join(_index_rows(items)) + "\n"
 
 
-def _cleanup_stale_legacy_indexes(layout: StorageLayout, statuses: set[str], vuln_types: set[str]) -> None:
+def _cleanup_stale_legacy_indexes(
+    layout: StorageLayout,
+    statuses: set[str],
+    vuln_types: set[str],
+    status_type: dict[tuple[str, str], list[dict[str, Any]]],
+) -> None:
     """Retire generated type/status navigation that no longer represents a finding."""
     index_root = layout.reports_root / "index"
     desired = {f"{slug}.md" for slug in statuses | vuln_types}
@@ -1137,13 +1142,15 @@ def _cleanup_stale_legacy_indexes(layout: StorageLayout, statuses: set[str], vul
         if path.name not in desired and _is_generated_navigation_file(path):
             path.unlink()
     for status_root in layout.reports_root.iterdir():
-        if status_root.name not in statuses or not status_root.is_dir() or status_root.is_symlink():
+        # Only these roots are owned exclusively by legacy status/type navigation.
+        # A finding-supplied status may collide with daily/category/packet roots.
+        if status_root.name not in REPORT_STATES or not status_root.is_dir() or status_root.is_symlink():
             continue
         for type_root in status_root.iterdir():
             if not type_root.is_dir() or type_root.is_symlink():
                 continue
             index_path = type_root / "index.md"
-            if (status_root.name not in statuses or type_root.name not in vuln_types) and _is_generated_navigation_file(index_path):
+            if (status_root.name, type_root.name) not in status_type and _is_generated_navigation_file(index_path):
                 index_path.unlink()
 
 
@@ -1194,7 +1201,7 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
     written.update(_write_category_views(layout, findings))
     written.update(_write_severity_views(layout, findings))
     written.update(write_legacy_deprecation_markers(layout))
-    _cleanup_stale_legacy_indexes(layout, statuses, vuln_types)
+    _cleanup_stale_legacy_indexes(layout, statuses, vuln_types, status_type)
     return written
 
 
