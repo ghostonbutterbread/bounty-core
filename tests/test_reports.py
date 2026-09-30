@@ -68,6 +68,105 @@ def test_write_finding_report_uses_stable_fid_path(tmp_path):
     assert (expected.parent / "_meta").is_dir()
 
 
+def test_write_finding_report_creates_incomplete_evidence_scaffold(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D42", evidence=["candidate request in run notes"])
+
+    report_path = write_finding_report(layout, finding)
+
+    evidence_path = report_path.parent / "EVIDENCE.md"
+    text = evidence_path.read_text(encoding="utf-8")
+    assert report_path.name == "REPORT.md"
+    assert "D42" in text
+    assert "evidence/" in text
+    assert "poc/" in text
+    assert "candidate request in run notes" not in text
+    assert "Ledger has 1 unreviewed evidence item" in text
+    assert "## Claim and status" in text
+    assert "## Evidence index" in text
+    assert "Pending:" in text
+    assert not (report_path.parent / "FINALIZED.md").exists()
+
+
+def test_evidence_scaffold_never_copies_free_form_secret_values(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D42", evidence=[
+        "Cookie: session=secret-value", 'api_key: "probe_leak_123"',
+        'Authorization: Bearer "probe_leak_456"', "capture-17",
+    ])
+    text = (write_finding_report(layout, finding).parent / "EVIDENCE.md").read_text(encoding="utf-8")
+    for value in ("secret-value", "probe_leak_123", "probe_leak_456", "capture-17"):
+        assert value not in text
+    assert "Ledger has 4 unreviewed evidence item" in text
+
+
+def test_rough_report_has_five_draft_sections_without_invented_facts(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(
+        summary="Observed hash input reaching RPC",
+        repro_steps=["Open the owned test page", "Set location.hash to the test value"],
+        impact="Requires a prior XSS",
+        remediation="Constrain bridge calls",
+    )
+    text = write_finding_report(layout, finding).read_text(encoding="utf-8")
+
+    for heading in ("Summary", "Technical details", "How to reproduce", "Impact", "Remediation"):
+        assert f"## {heading}\n" in text
+    assert "Observed hash input reaching RPC" in text
+    assert "location.hash" in text
+    assert "host.rpc" in text
+    assert "1. Open the owned test page" in text
+    assert "2. Set location.hash to the test value" in text
+    assert "Requires a prior XSS" in text
+    assert "Constrain bridge calls" in text
+    assert "## Source -> Sink" in text
+
+
+def test_rough_report_marks_missing_draft_facts_unknown(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(source="", sink="", impact="", remediation="", repro_steps=[])
+    text = write_finding_report(layout, finding).read_text(encoding="utf-8")
+
+    for heading in ("Technical details", "How to reproduce", "Impact", "Remediation"):
+        section = text.split(f"## {heading}\n", 1)[1].split("\n## ", 1)[0]
+        assert "Unknown" in section
+    assert "## Review Notes" in text
+
+
+def test_write_finding_report_preserves_manual_evidence_and_report_on_refresh(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    first = _finding(fid="D42")
+    report_path = write_finding_report(layout, first)
+    evidence_path = report_path.parent / "EVIDENCE.md"
+    evidence_path.write_text("# Investigator evidence\n\nKeep these notes.\n", encoding="utf-8")
+    report_path.write_text("# Investigator report\n\nKeep this analysis.\n", encoding="utf-8")
+
+    changed = _finding(fid="D42", title="Changed title", status="confirmed")
+    assert write_finding_report(layout, changed) == report_path
+    assert evidence_path.read_text(encoding="utf-8") == "# Investigator evidence\n\nKeep these notes.\n"
+    assert report_path.read_text(encoding="utf-8") == "# Investigator report\n\nKeep this analysis.\n"
+    assert not (report_path.parent / "FINALIZED.md").exists()
+
+
+def test_ledger_navigation_backfills_missing_evidence_in_existing_packet(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D42")
+    report_path = write_finding_report(layout, finding)
+    evidence_path = report_path.parent / "EVIDENCE.md"
+    evidence_path.unlink()
+    report_path.write_text("# Reviewed report\n", encoding="utf-8")
+    layout.ledgers_root.mkdir(parents=True, exist_ok=True)
+    (layout.ledgers_root / "ledger.json").write_text(
+        json.dumps({"version": 2, "program": "acme", "findings": [finding]}), encoding="utf-8"
+    )
+
+    refresh_report_navigation_from_ledger(layout)
+
+    assert "## Claim and status" in evidence_path.read_text(encoding="utf-8")
+    assert report_path.read_text(encoding="utf-8") == "# Reviewed report\n"
+    assert not (report_path.parent / "FINALIZED.md").exists()
+
+
 def test_write_finding_report_migrates_stale_legacy_status_path_into_packet(tmp_path):
     layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
     finding = _finding(fid="D09", status="dormant", title="Stable report")
