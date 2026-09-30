@@ -81,8 +81,23 @@ def test_write_finding_report_creates_incomplete_evidence_scaffold(tmp_path):
     assert "evidence/" in text
     assert "poc/" in text
     assert "candidate request in run notes" not in text
-    assert "not yet verified" in text.lower()
+    assert "Ledger has 1 unreviewed evidence item" in text
+    assert "## Claim and status" in text
+    assert "## Evidence index" in text
+    assert "Pending:" in text
     assert not (report_path.parent / "FINALIZED.md").exists()
+
+
+def test_evidence_scaffold_never_copies_free_form_secret_values(tmp_path):
+    layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    finding = _finding(fid="D42", evidence=[
+        "Cookie: session=secret-value", 'api_key: "probe_leak_123"',
+        'Authorization: Bearer "probe_leak_456"', "capture-17",
+    ])
+    text = (write_finding_report(layout, finding).parent / "EVIDENCE.md").read_text(encoding="utf-8")
+    for value in ("secret-value", "probe_leak_123", "probe_leak_456", "capture-17"):
+        assert value not in text
+    assert "Ledger has 4 unreviewed evidence item" in text
 
 
 def test_rough_report_has_five_draft_sections_without_invented_facts(tmp_path):
@@ -147,7 +162,7 @@ def test_ledger_navigation_backfills_missing_evidence_in_existing_packet(tmp_pat
 
     refresh_report_navigation_from_ledger(layout)
 
-    assert "not yet verified" in evidence_path.read_text(encoding="utf-8").lower()
+    assert "## Claim and status" in evidence_path.read_text(encoding="utf-8")
     assert report_path.read_text(encoding="utf-8") == "# Reviewed report\n"
     assert not (report_path.parent / "FINALIZED.md").exists()
 

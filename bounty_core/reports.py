@@ -572,19 +572,35 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
     for child in (packet_dir, packet_dir / POC_DIRNAME, packet_dir / EVIDENCE_DIRNAME, packet_dir / META_DIRNAME):
         child.mkdir(parents=True, exist_ok=True)
     evidence_path = packet_dir / EVIDENCE_FILENAME
+    # Free-form ledger evidence may contain secrets (including quoted variants).
+    # Carry a count and the canonical source pointer, never copy its raw contents.
+    leads = finding.get("evidence") or []
+    lead_count = len(leads) if isinstance(leads, (list, tuple)) else 1
     try:
         with evidence_path.open("x", encoding="utf-8") as stream:
             stream.write(
-                f"# Evidence packet — {_finding_fid(finding)}\n\n"
-                "Evidence is not yet verified or complete. Review and fill this packet before submission.\n\n"
-                "## Artifacts and provenance\n\n"
-                "- Add paths under `evidence/`, source, collection time, and what each artifact proves.\n\n"
-                "## Reproduction\n\n"
-                "- Add steps and any PoC under `poc/`; link the relevant request/response or output.\n\n"
-                "## Trust boundary and impact\n\n"
-                "- Record the observed boundary crossing and demonstrated impact; separate assumptions.\n\n"
-                "## Gaps and next verification\n\n"
-                "- Record missing evidence, blockers, and the next validation step.\n"
+                f"# {_finding_fid(finding)} — evidence for {_title_for(finding)}\n\n"
+                "Initial ledger references are unverified leads, not proof of a completed claim.\n\n"
+                "## Claim and status\n\n"
+                "Pending: identify the protected capability and verify the independent effect.\n\n"
+                "## Attacker model and prerequisites\n\n"
+                "Pending: starting access, owned fixtures, and required feature state.\n\n"
+                "## Evidence index\n\n"
+                + (f"- Ledger has {lead_count} unreviewed evidence item(s); inspect the canonical finding and add sanitized references here." if lead_count else "- Pending: add sanitized artifact and Attempt pointers.")
+                + "\n\n## Complete reproduction record\n\n"
+                "Pending: observed action, expected denial, actual response and independent verification.\n\n"
+                "## Root cause and supporting implementation facts\n\n"
+                "Pending: distinguish facts from interpretations.\n\n"
+                "## Demonstrated impact and negative boundaries\n\n"
+                "Pending: demonstrated consequence and material limits.\n\n"
+                "## Reproduction variants, controls, and failed attempts\n\n"
+                "Pending: link representative Attempts, not copied payload history.\n\n"
+                "## PoC and artifact references\n\n"
+                "Pending: add sanitized paths under `evidence/` and an applicable PoC under `poc/`.\n\n"
+                "## Remediation candidates\n\n"
+                "Pending: fix the demonstrated cause.\n\n"
+                "## Open questions / dated corrections\n\n"
+                "Pending: name the next discriminator or a concrete blocker.\n"
             )
     except FileExistsError:
         pass  # Create-only: never replace hand-edited evidence, including on backfill.

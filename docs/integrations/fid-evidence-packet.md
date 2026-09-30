@@ -13,7 +13,7 @@
 
 ## Intent and implemented contract
 
-When report writing is enabled, Bounty Core creates a stable `reports/{FID}/EVIDENCE.md` scaffold alongside editable `REPORT.md`. The scaffold is create-only, labels evidence unverified/incomplete, and asks for artifact provenance, reproduction, trust boundary/impact, and gaps. Existing evidence and manually edited reports are preserved. Existing ledger/navigation refresh backfills a missing scaffold. `write_report=False` with `refresh=False` creates no packet. No automatic `FINALIZED.md`, evidence completeness claim, or submission action.
+When report writing is enabled, Bounty Core creates a stable `reports/{FID}/EVIDENCE.md` scaffold alongside editable `REPORT.md`. The scaffold is create-only, counts initial ledger evidence leads without copying free-form content (which may contain quoted secrets), and has the internal claim, actor, evidence, reproduction, impact, controls, PoC and gap headings needed for investigation. The investigator reviews the source and adds sanitized pointers. Existing evidence and manually edited reports are preserved. Existing ledger/navigation refresh backfills a missing scaffold. `write_report=False` with `refresh=False` creates no packet. No automatic `FINALIZED.md`, evidence completeness claim, or submission action.
 
 Generated rough reports now expose Summary, Technical details, How to reproduce, Impact, and Remediation with ledger-provided values or explicit unknowns. Existing Source -> Sink, Blocking / Chain Requirements, Review Notes, and Evidence remain. No ledger schema or navigation behavior changes.
 
