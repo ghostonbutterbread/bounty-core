@@ -7,8 +7,8 @@
 - **Base commit:** `8cc64e68bc93919573c5e3cb2662283889d7858c` (fetched `origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-09-29
-- **Latest immutable recovery checkpoint:** `dd016020ebd44e8979613000107b98d465123162`
-- **Feature implementation commit(s):** `dd016020ebd44e8979613000107b98d465123162`
+- **Latest immutable recovery checkpoint:** `1122ea5` (privacy correction; feature tip)
+- **Feature implementation commit(s):** `dd016020`, `1122ea5`
 - **Inspiration:** FID-to-ledger evidence packet and rough draft submission handoff.
 
 ## Intent and implemented contract
@@ -19,10 +19,10 @@ Generated rough reports now expose Summary, Technical details, How to reproduce,
 
 ## Evidence and review
 
-- `python -m pytest tests/test_reports.py tests/test_ledger_v2_contract.py -q`: 40 passed.
-- `python -m pytest tests -q`: 157 passed.
+- `python3 -m pytest -q -p no:cacheprovider tests/test_reports.py tests/test_ledger_v2_contract.py`: 41 passed.
+- `python3 -m pytest -q -p no:cacheprovider`: 158 passed.
 - `git diff --check`: clean.
-- Independent review: pending parent review; no merge or push authorized.
+- Independent review: initial privacy block (quoted secret forms); free-form evidence copying removed; final re-review accepted feature tip `1122ea5` for beta integration.
 - Replay/cohort fixture: local pytest tmp-path integration exercises report writes, ledger backfill, and opt-out.
 - Merge/ancestry: feature based on fetched `origin/beta` at base SHA; parent owns reconciliation.
 
@@ -33,8 +33,8 @@ Generated rough reports now expose Summary, Technical details, How to reproduce,
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/fid-evidence-packet`
-- **Latest immutable recovery checkpoint:** `dd016020ebd44e8979613000107b98d465123162`
-- **Feature implementation commit(s):** `dd016020ebd44e8979613000107b98d465123162`
+- **Latest immutable recovery checkpoint:** `1122ea5` (privacy correction; feature tip)
+- **Feature implementation commit(s):** `dd016020`, `1122ea5`
 - **Exact resume point:** parent review and integration into `beta` (not this subagent).
 - **Working-tree state at handoff:** to be committed clean.
 
