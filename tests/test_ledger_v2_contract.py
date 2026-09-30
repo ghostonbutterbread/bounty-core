@@ -294,6 +294,48 @@ def test_old_add_finding_api_uses_v2_identity_for_source_style_findings(tmp_path
     assert findings[0]["current"]["status"] == "needs-review"
 
 
+def test_add_finding_report_opt_out_does_not_create_evidence_packet(tmp_path):
+    added = add_finding(
+        {
+            "program": "mobile",
+            "family": "binaries",
+            "lane": "apk",
+            "type": "IPC trust boundary",
+            "file": "src/preload.js",
+            "severity": "HIGH",
+        },
+        root_override=tmp_path,
+        write_report=False,
+        refresh=False,
+    )
+    layout = resolve_storage("mobile", family="binaries", lane="apk", root_override=tmp_path)
+
+    assert added["finding"]["fid"]
+    assert "report_path" not in added["finding"]
+    assert not (layout.reports_root / added["finding"]["fid"]).exists()
+
+
+def test_add_finding_report_enabled_creates_evidence_without_finalizing(tmp_path):
+    added = add_finding(
+        {
+            "program": "mobile",
+            "family": "binaries",
+            "lane": "apk",
+            "type": "IPC trust boundary",
+            "file": "src/preload.js",
+            "severity": "HIGH",
+        },
+        root_override=tmp_path,
+        write_report=True,
+        refresh=False,
+    )
+
+    report_path = Path(added["finding"]["report_path"])
+    assert report_path.exists()
+    assert (report_path.parent / "EVIDENCE.md").is_file()
+    assert not (report_path.parent / "FINALIZED.md").exists()
+
+
 def test_old_update_finding_api_preserves_custom_status_values(tmp_path):
     added = add_finding(
         {
