@@ -7,8 +7,8 @@
 - **Base commit:** `8cc64e68bc93919573c5e3cb2662283889d7858c` (fetched `origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-09-29
-- **Latest immutable recovery checkpoint:** none yet; feature commit pending
-- **Feature implementation commit(s):** pending
+- **Latest immutable recovery checkpoint:** `dd016020ebd44e8979613000107b98d465123162`
+- **Feature implementation commit(s):** `dd016020ebd44e8979613000107b98d465123162`
 - **Inspiration:** FID-to-ledger evidence packet and rough draft submission handoff.
 
 ## Intent and implemented contract
@@ -33,8 +33,8 @@ Generated rough reports now expose Summary, Technical details, How to reproduce,
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/fid-evidence-packet`
-- **Latest immutable recovery checkpoint:** pending commit
-- **Feature implementation commit(s):** pending commit
+- **Latest immutable recovery checkpoint:** `dd016020ebd44e8979613000107b98d465123162`
+- **Feature implementation commit(s):** `dd016020ebd44e8979613000107b98d465123162`
 - **Exact resume point:** parent review and integration into `beta` (not this subagent).
 - **Working-tree state at handoff:** to be committed clean.
 
