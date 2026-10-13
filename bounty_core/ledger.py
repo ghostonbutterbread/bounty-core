@@ -20,10 +20,15 @@ from .finding import VALID_STATUSES, normalize_finding, normalize_severity, slug
 from .indexes import refresh_indexes
 from .reports import (
     CATEGORY_STUB_GENERATED_MARKER,
+    EVIDENCE_ONLY,
     FINDING_REPORT_GENERATED_MARKER,
+    LEGACY_PACKET,
     REPORT_NAV_GENERATED_MARKER,
+    canonical_finding_report_dir,
+    ensure_finding_evidence_packet,
     is_generated_safe_finding_report,
     refresh_report_indexes,
+    validate_packet_mode,
     write_finding_report,
 )
 from .storage import DEFAULT_LANES, VALID_FAMILIES, StorageLayout, normalize_family, normalize_lane, resolve_storage
@@ -923,8 +928,10 @@ def patch_finding_by_fid(
     refresh: bool = False,
     update_current: bool = False,
     update_sighting: bool = False,
+    packet_mode: str = LEGACY_PACKET,
 ) -> dict[str, Any] | None:
     """Patch one finding by FID without touching observation metadata by default."""
+    validate_packet_mode(packet_mode)
     target = str(fid or "").strip()
     if not target:
         raise ValueError("fid is required")
@@ -932,7 +939,7 @@ def patch_finding_by_fid(
     root = _normalize_root_override(root_override, storage_root)
     layout = (
         resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
-        if write_report or refresh
+        if write_report or refresh or packet_mode == EVIDENCE_ONLY
         else None
     )
     normalized_patch = {
@@ -991,15 +998,44 @@ def patch_finding_by_fid(
                         if status:
                             latest["status"] = status
                         finding["current"] = _current_from_sightings([item for item in sightings if isinstance(item, dict)])
-            if write_report and layout is not None:
+            if packet_mode == EVIDENCE_ONLY and layout is not None:
+                ensure_finding_evidence_packet(layout, finding)
+            elif write_report and layout is not None:
                 report_path = write_finding_report(layout, finding)
                 finding["report_path"] = str(report_path)
                 _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
             if refresh and layout is not None:
                 refresh_indexes(layout, findings)
-                refresh_report_indexes(layout, findings)
+                refresh_report_indexes(layout, findings, packet_mode=packet_mode)
             return dict(finding)
     return None
+
+
+def record_final_finding_report(
+    program: str,
+    fid: str,
+    report_path: str | Path,
+    *,
+    lane: str = "apk",
+    family: str | None = None,
+    root_override: str | Path | None = None,
+    storage_root: str | Path | None = None,
+    refresh: bool = True,
+) -> dict[str, Any] | None:
+    """Register an existing Bunny-authored ``*-<FID>.md`` without writing it."""
+    root = _normalize_root_override(root_override, storage_root)
+    layout = resolve_storage(program, family=family, lane=lane, root_override=root, create=False)
+    finding = ledger_get(program, fid, family=layout.family, lane=layout.lane, root_override=root)
+    if finding is None:
+        return None
+    path = Path(report_path).expanduser().resolve(strict=False)
+    packet_dir = canonical_finding_report_dir(layout, finding).resolve(strict=False)
+    if path.parent != packet_dir or path.suffix != ".md" or not path.stem.endswith(f"-{fid}") or not path.is_file():
+        raise ValueError("final report must be an existing *-<FID>.md file in the finding packet")
+    return patch_finding_by_fid(
+        program, fid, {"report_path": str(path)}, family=layout.family, lane=layout.lane,
+        root_override=root, packet_mode=EVIDENCE_ONLY, refresh=refresh,
+    )
 
 
 def update_coverage_state(
@@ -1435,6 +1471,7 @@ def _add_source_style_finding(
     storage_root: str | Path | None = None,
     write_report: bool = True,
     refresh: bool = True,
+    packet_mode: str = LEGACY_PACKET,
 ) -> dict[str, Any]:
     root = _normalize_root_override(root_override, storage_root)
     entry = dict(finding or {})
@@ -1489,14 +1526,16 @@ def _add_source_style_finding(
 
         _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": dict(stored)})
 
-        if write_report:
+        if packet_mode == EVIDENCE_ONLY:
+            ensure_finding_evidence_packet(layout, stored)
+        elif write_report:
             report_path = write_finding_report(layout, stored)
             stored["report_path"] = str(report_path)
             _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
         if refresh:
             refresh_indexes(layout, findings)
-            refresh_report_indexes(layout, findings)
+            refresh_report_indexes(layout, findings, packet_mode=packet_mode)
 
         return {"is_new": is_new, "finding": dict(stored), "layout": layout.to_dict()}
 
@@ -1511,8 +1550,10 @@ def add_finding(
     storage_root: str | Path | None = None,
     write_report: bool = True,
     refresh: bool = True,
+    packet_mode: str = LEGACY_PACKET,
 ) -> dict[str, Any]:
     """Normalize and add/update one finding while using the Ledger V2 store."""
+    validate_packet_mode(packet_mode)
     if _is_source_style_finding(finding or {}):
         return _add_source_style_finding(
             finding,
@@ -1523,6 +1564,7 @@ def add_finding(
             storage_root=storage_root,
             write_report=write_report,
             refresh=refresh,
+            packet_mode=packet_mode,
         )
 
     root = _normalize_root_override(root_override, storage_root)
@@ -1554,14 +1596,16 @@ def add_finding(
 
         _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
 
-        if write_report:
+        if packet_mode == EVIDENCE_ONLY:
+            ensure_finding_evidence_packet(layout, stored)
+        elif write_report:
             report_path = write_finding_report(layout, stored)
             stored["report_path"] = str(report_path)
             _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
         if refresh:
             refresh_indexes(layout, findings)
-            refresh_report_indexes(layout, findings)
+            refresh_report_indexes(layout, findings, packet_mode=packet_mode)
 
     return {"is_new": is_new, "finding": stored, "layout": layout.to_dict()}
 
@@ -1613,8 +1657,10 @@ def update_finding(
     root_override: str | Path | None = None,
     storage_root: str | Path | None = None,
     refresh: bool = True,
+    packet_mode: str = LEGACY_PACKET,
 ) -> dict[str, Any]:
     """Patch one finding while preserving immutable observation metadata."""
+    validate_packet_mode(packet_mode)
     root = _normalize_root_override(root_override, storage_root)
     layout = resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
     protected = {"identity", "program", "family", "lane", "created_at", "first_seen", "first_snapshot", "sightings", "provenance", "fid"}
@@ -1635,9 +1681,12 @@ def update_finding(
         finding.update(normalized_patch)
         finding["updated_at"] = now
 
-        report_path = write_finding_report(layout, finding)
-        finding["report_path"] = str(report_path)
-        _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+        if packet_mode == EVIDENCE_ONLY:
+            ensure_finding_evidence_packet(layout, finding)
+        else:
+            report_path = write_finding_report(layout, finding)
+            finding["report_path"] = str(report_path)
+            _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
 
         _append_jsonl_event(
             _findings_jsonl_path(layout),
@@ -1653,7 +1702,7 @@ def update_finding(
 
         if refresh:
             refresh_indexes(layout, findings)
-            refresh_report_indexes(layout, findings)
+            refresh_report_indexes(layout, findings, packet_mode=packet_mode)
 
         return {"ok": True, "finding": finding, "layout": layout.to_dict()}
 
@@ -1674,6 +1723,7 @@ __all__ = [
     "migrate_ledger_payload",
     "migrate_legacy_finding",
     "patch_finding_by_fid",
+    "record_final_finding_report",
     "update_coverage_state",
     "update_finding",
 ]
