@@ -1,6 +1,6 @@
 # Evidence-only packets integration dossier
 
-- **Status:** feature; independent review defects repaired, pending rereview/integration
+- **Status:** feature accepted for beta integration; runtime activation remains separate
 - **Owner:** Hermes bugfix subagent
 - **Branch / owning ref:** `feat/evidence-only-packets`
 - **Worktree:** `/home/ryushe/worktrees/bounty-core-evidence-only`
@@ -22,8 +22,8 @@ Review repair: reject symlinked packet/EVIDENCE paths before packet writes and r
 - Focused: `python -m pytest tests/test_evidence_only_packets.py tests/test_reports.py tests/test_phase_b.py -q` — 45 passed after repair.
 - Full: `python -m pytest -q` — 165 passed after repair; `git diff --check` clean.
 - Coverage: source and normalized add, edit/submission, final registration, link targets, repeated refresh, legacy preservation, missing target fallback, invalid mode/path; two new negative regressions prove external packet symlink cannot write EVIDENCE or register a final report (including a report-file symlink), and D01 cannot point at D02's report/evidence or delete D02's generated REPORT.md on legacy update. Poisoned ledger navigation falls back to D01 evidence.
-- Independent review: reviewer found both defects in `0a966b7`; repair awaits independent rereview.
-- Merge/ancestry: fetched `origin/beta` at base SHA before branching and again before commit; no movement observed. No merge/push authorized.
+- Independent review: initial reviewer found both defects in `0a966b7`; fresh read-only rereview of repaired `7810622b6b624522bbd03221f0b5bc18d1badb00` returned ACCEPT, independently replayed both attacks and ran full suite (165 passed).
+- Merge/ancestry: fetched `origin/beta` at base SHA before branching and again before commit; no movement observed. Beta merge/publish is a separate tracked integration step.
 
 ## Blockers and deferred work
 
