@@ -7,8 +7,8 @@
 - **Base commit:** `9968eeb58ca902549097d8941875b0e01cfe0af2` (`origin/beta` fetched before work)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-10-13
-- **Latest immutable recovery checkpoint:** none yet (commit pending)
-- **Feature implementation commit(s):** none yet (commit pending)
+- **Latest immutable recovery checkpoint:** `a879453c0ea084e944455d9453592cf7048b1103`
+- **Feature implementation commit(s):** `a879453c0ea084e944455d9453592cf7048b1103`
 - **Inspiration:** `/home/ryushe/.hermes/plans/2026-10-13_152453-report-packet-layout.md`; BBH consumer requested `D01-owned-xss` and `D01-sqlite-injection-via-exposed-ipc-port`.
 
 ## Intent and contract
@@ -36,7 +36,7 @@ Evidence-only navigation creates class and severity indexes only when populated,
 ## Handoff and gates
 
 - **Exact resume point:** review feature diff and test receipts; reconcile any advanced `origin/beta`, run tests, then integrate only if review accepts. Parent owns merge/push/pin.
-- **Working tree at handoff:** intended clean after commit.
+- **Working tree at handoff:** clean after final dossier-only commit; verify feature tip separately from the checkpoint above.
 - **Integration gate:** independent review, full suite green, branch reconciliation.
 - **Activation gate:** BBH immutable provider pin and installed provenance plus disposable-root tests.
 - **Promotion gate:** explicit separate decision; no production Shared migration.
