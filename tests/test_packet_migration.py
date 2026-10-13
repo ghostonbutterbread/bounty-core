@@ -1,0 +1,129 @@
+"""Provider contract for new descriptive packets and read-only legacy coexistence."""
+from pathlib import Path
+import pytest
+
+from bounty_core import add_finding, patch_finding_by_fid, record_final_finding_report, resolve_storage
+from bounty_core.ledger import ledger_get
+from bounty_core.reports import refresh_report_navigation_from_ledger
+
+
+def row(**changes):
+    value = {"program": "acme", "family": "web_bounty", "lane": "web", "fid": "D01", "type": "View Only Documents Authorization", "class_name": "idor", "file": "app.js", "line": 7, "severity": "HIGH"}
+    value.update(changes)
+    return value
+
+
+def layout(root, program="acme"):
+    return resolve_storage(program, family="web_bounty", lane="web", root_override=root)
+
+
+def test_new_packet_freezes_descriptive_slug_and_uses_final_in_views(tmp_path):
+    created = add_finding(row(), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    packet = layout(tmp_path).reports_root / "D01-view-only-documents-authorization"
+    assert Path(created["report_dir"]) == packet
+    assert Path(created["evidence_path"]) == packet / "EVIDENCE.md"
+    edited = patch_finding_by_fid("acme", "D01", {"title": "Renamed", "type": "changed", "status": "confirmed", "severity": "LOW"}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
+    assert edited["report_dir"] == str(packet)
+    assert not (layout(tmp_path).reports_root / "D01-changed").exists()
+    final = packet / "acme-idor-D01.md"
+    final.write_text("# Authored\n")
+    record_final_finding_report("acme", "D01", final, family="web_bounty", lane="web", root_override=tmp_path)
+    assert "[[../../D01-view-only-documents-authorization/acme-idor-D01|D01]]" in (layout(tmp_path).reports_root / "severity/low/index.md").read_text()
+    assert "acme-idor-D01" in (layout(tmp_path).reports_root / "categories/idor/index.md").read_text()
+    assert final.read_text() == "# Authored\n"
+
+
+def test_submission_view_reversible_and_no_eager_legacy_navigation(tmp_path):
+    created = add_finding(row(), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    root = layout(tmp_path).reports_root
+    assert not (root / "daily").exists()
+    assert not (root / "index").exists()
+    assert not (root / "raw").exists()
+    assert not (root / "submitted").exists()
+    patch_finding_by_fid("acme", "D01", {"submission": {"state": "submitted"}}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
+    assert "D01-view-only-documents-authorization/EVIDENCE" in (root / "submitted/index.md").read_text()
+    patch_finding_by_fid("acme", "D01", {"submission": {"state": "dropped"}}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
+    assert not (root / "submitted/index.md").exists()
+    assert not (root / "submitted").exists()
+    assert Path(created["report_dir"]).exists()
+
+
+def test_existing_fid_packet_remains_at_original_path(tmp_path):
+    root = layout(tmp_path).reports_root
+    packet = root / "D01"
+    packet.mkdir(parents=True)
+    (packet / "EVIDENCE.md").write_text("# Historic evidence\n")
+    added = add_finding(row(), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert added["report_dir"] == str(packet)
+    assert not (root / "D01-view-only-documents-authorization").exists()
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    assert (packet / "EVIDENCE.md").read_text() == "# Historic evidence\n"
+
+
+def test_packet_pointer_rejects_cross_fid_prefix_and_symlink(tmp_path):
+    created = add_finding(row(), root_override=tmp_path, packet_mode="evidence_only", refresh=False)["finding"]
+    root = layout(tmp_path).reports_root
+    foreign = root / "D010-other"
+    foreign.mkdir()
+    (foreign / "acme-D01.md").write_text("foreign\n")
+    with pytest.raises(ValueError):
+        record_final_finding_report("acme", "D01", foreign / "acme-D01.md", family="web_bounty", lane="web", root_override=tmp_path)
+    with pytest.raises(ValueError):
+        patch_finding_by_fid("acme", "D01", {"report_dir": str(foreign)}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only")
+    external = tmp_path / "external"
+    external.mkdir()
+    packet = Path(created["report_dir"])
+    packet.rename(root / "saved")
+    packet.symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError):
+        patch_finding_by_fid("acme", "D01", {"status": "confirmed"}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only")
+    assert not (external / "EVIDENCE.md").exists()
+
+
+def test_program_isolation_and_default_legacy_mode(tmp_path):
+    first = add_finding(row(), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    second = add_finding(row(program="other"), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert first["fid"] == second["fid"] == "D01"
+    assert first["report_dir"] != second["report_dir"]
+    legacy = add_finding(row(fid="D02", file="other.js"), root_override=tmp_path)["finding"]
+    assert Path(legacy["report_path"]).is_file()
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Owned XSS", "D01-owned-xss"),
+    ("SQLite injection via exposed IPC port", "D01-sqlite-injection-via-exposed-ipc-port"),
+])
+def test_consumer_title_contract_and_submitted_final_link(tmp_path, title, expected):
+    finding = add_finding(row(title=title), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    packet = layout(tmp_path).reports_root / expected
+    assert finding["report_dir"] == str(packet)
+    assert ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)["report_dir"] == str(packet)
+    final = packet / "acme-issue-D01.md"
+    final.write_text("# Final\n")
+    record_final_finding_report("acme", "D01", final, family="web_bounty", lane="web", root_override=tmp_path)
+    patch_finding_by_fid("acme", "D01", {"submission": {"state": "submitted"}}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
+    assert f"[[../{expected}/acme-issue-D01|D01]]" in (packet.parent / "submitted/index.md").read_text()
+    assert not (packet.parent / "daily").exists()
+    assert not (packet.parent / "raw").exists()
+
+
+def test_historical_navigation_and_authored_packet_survive_refresh(tmp_path):
+    root = layout(tmp_path).reports_root
+    historical = root / "raw" / "xss" / "index.md"
+    historical.parent.mkdir(parents=True)
+    historical.write_text("# Historical review notes\n")
+    packet = root / "D01"
+    packet.mkdir()
+    (packet / "EVIDENCE.md").write_text("# Investigator notes\n")
+    add_finding(row(), root_override=tmp_path, packet_mode="evidence_only")
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    assert historical.read_text() == "# Historical review notes\n"
+    assert (packet / "EVIDENCE.md").read_text() == "# Investigator notes\n"
+    assert not (root / "D01-view-only-documents-authorization").exists()
+
+
+def test_reject_unsafe_exact_fid_before_packet_write(tmp_path):
+    with pytest.raises(ValueError):
+        add_finding(row(fid="D01/../../outside"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)
+    assert not (tmp_path / "outside").exists()
+    assert ledger_get("acme", "D01/../../outside", family="web_bounty", lane="web", root_override=tmp_path) is None

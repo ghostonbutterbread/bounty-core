@@ -21,25 +21,25 @@ def _layout(root):
 
 
 def _assert_evidence_link(layout, fid):
-    target = layout.reports_root / fid / "EVIDENCE.md"
+    packet = Path(ledger_get(layout.program, fid, family=layout.family, lane=layout.lane, root_override=layout.base_root)["report_dir"])
+    target = packet / "EVIDENCE.md"
     assert target.is_file()
     active = layout.reports_root / "active.md"
-    assert f"[[{fid}/EVIDENCE|{fid}]]" in active.read_text()
+    assert f"[[{packet.name}/EVIDENCE|{fid}]]" in active.read_text()
     links = list((layout.reports_root / "categories").glob(f"*/{fid}.md"))
     assert len(links) == 1
     assert links[0].exists()
     assert links[0].resolve() == target.resolve()
-    daily = list((layout.reports_root / "daily").glob("*/active.md"))
-    assert daily and f"[[../../{fid}/EVIDENCE|{fid}]]" in daily[0].read_text()
+    assert not (layout.reports_root / "daily").exists()
     severity = layout.reports_root / "severity" / "high" / "index.md"
-    assert f"[[../../{fid}/EVIDENCE|{fid}]]" in severity.read_text()
+    assert f"[[../../{packet.name}/EVIDENCE|{fid}]]" in severity.read_text()
 
 
 def test_source_add_patch_and_final_report_navigation(tmp_path):
     added = add_finding(_source(), root_override=tmp_path, packet_mode="evidence_only")
     fid = added["finding"]["fid"]
     layout = _layout(tmp_path)
-    packet = layout.reports_root / fid
+    packet = Path(added["finding"]["report_dir"])
     assert "report_path" not in added["finding"]
     assert Path(added["finding"]["evidence_path"]) == packet / "EVIDENCE.md"
     assert not (packet / "REPORT.md").exists()
@@ -51,7 +51,7 @@ def test_source_add_patch_and_final_report_navigation(tmp_path):
     assert patched["evidence_path"] == str(evidence)
     assert evidence.read_text() == "# Reviewed evidence\n"
     assert not (packet / "REPORT.md").exists()
-    assert f"[[{fid}/EVIDENCE|{fid}]]" in (layout.reports_root / "confirmed.md").read_text()
+    assert f"[[{packet.name}/EVIDENCE|{fid}]]" in (layout.reports_root / "confirmed.md").read_text()
 
     final = packet / f"acme-xss-{fid}.md"
     with pytest.raises(ValueError):
@@ -64,7 +64,7 @@ def test_source_add_patch_and_final_report_navigation(tmp_path):
     patched = patch_finding_by_fid("acme", fid, {"submission_status": "submitted"}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
     assert patched is not None
     assert patched["report_path"] == str(final)
-    assert f"[[{fid}/{final.stem}|{fid}]]" in (layout.reports_root / "confirmed.md").read_text()
+    assert f"[[{packet.name}/{final.stem}|{fid}]]" in (layout.reports_root / "confirmed.md").read_text()
     assert next((layout.reports_root / "categories").glob(f"*/{fid}.md")).resolve() == final.resolve()
     refresh_report_navigation_from_ledger(layout, packet_mode="evidence_only")
     assert ledger_get("acme", fid, family="web_bounty", lane="web", root_override=tmp_path)["report_path"] == str(final)
@@ -82,7 +82,7 @@ def test_normalized_add_and_edit_use_evidence_only(tmp_path):
     assert updated["ok"]
     assert "report_path" not in updated["finding"]
     assert Path(updated["finding"]["evidence_path"]).is_file()
-    assert not (_layout(tmp_path).reports_root / fid / "REPORT.md").exists()
+    assert not (Path(updated["finding"]["report_dir"]) / "REPORT.md").exists()
 
 
 def test_repeated_refresh_keeps_legacy_files_and_report_pointer(tmp_path):
@@ -105,8 +105,8 @@ def test_repeated_refresh_keeps_legacy_files_and_report_pointer(tmp_path):
         assert next(row for row in rows if row["fid"] == "L01")["report_path"] == str(report)
         assert "report_path" not in next(row for row in rows if row["fid"] == "N02")
         active = (layout.reports_root / "active.md").read_text()
-        assert "[[L01/REPORT|L01]]" in active
-        assert "[[N02/EVIDENCE|N02]]" in active
+        assert f"[[{report.parent.name}/REPORT|L01]]" in active
+        assert f"[[{evidence.parent.name}/EVIDENCE|N02]]" in active
         assert next((layout.reports_root / "categories").glob("*/L01.md")).resolve() == report.resolve()
 
 
@@ -115,9 +115,9 @@ def test_explicit_index_refresh_creates_link_targets_and_validates_mode(tmp_path
     rows = [_source("D01"), {**_source("D02"), "file": "other.js"}]
     refresh_report_indexes(layout, rows, packet_mode="evidence_only")
     for row in rows:
-        assert (layout.reports_root / row["fid"] / "EVIDENCE.md").exists()
-        assert not (layout.reports_root / row["fid"] / "REPORT.md").exists()
-    assert "[[D01/EVIDENCE|D01]]" in (layout.reports_root / "active.md").read_text()
+        assert (Path(row["report_dir"]) / "EVIDENCE.md").exists()
+        assert not (Path(row["report_dir"]) / "REPORT.md").exists()
+    assert "[[D01-xss/EVIDENCE|D01]]" in (layout.reports_root / "active.md").read_text()
     with pytest.raises(ValueError):
         add_finding(_source(), root_override=tmp_path, packet_mode="unexpected")
 
@@ -125,7 +125,7 @@ def test_explicit_index_refresh_creates_link_targets_and_validates_mode(tmp_path
 def test_missing_report_pointer_falls_back_to_existing_evidence(tmp_path):
     layout = _layout(tmp_path)
     add_finding(_source("D11"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)
-    missing = layout.reports_root / "D11" / "acme-xss-D11.md"
+    missing = Path(ledger_get("acme", "D11", family="web_bounty", lane="web", root_override=tmp_path)["report_dir"]) / "acme-xss-D11.md"
     patched = patch_finding_by_fid("acme", "D11", {"report_path": str(missing)}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
     assert patched is not None and patched["report_path"] == str(missing)
     _assert_evidence_link(layout, "D11")
@@ -147,6 +147,7 @@ def test_symlinked_packet_cannot_write_outside_or_register_external_report(tmp_p
     added = add_finding(_source("D01"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)["finding"]
     external_report = outside / "acme-xss-D01.md"
     external_report.write_text("# Outside\n")
+    packet = Path(added["report_dir"])
     packet.rename(tmp_path / "original-packet")
     packet.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError):
@@ -189,9 +190,9 @@ def test_foreign_packet_pointer_rejected_and_legacy_update_preserves_other_fid(t
     next(row for row in payload["findings"] if row["fid"] == "D01")["report_path"] = str(other_report)
     path.write_text(json.dumps(payload))
     refresh_report_navigation_from_ledger(layout, packet_mode="evidence_only")
-    assert "[[D01/EVIDENCE|D01]]" in (layout.reports_root / "active.md").read_text()
+    assert f"[[{Path(d01['report_dir']).name}/EVIDENCE|D01]]" in (layout.reports_root / "active.md").read_text()
     assert "[[D02/REPORT|D01]]" not in (layout.reports_root / "active.md").read_text()
     updated = update_finding(d01["identity"], {"status": "confirmed"}, "acme", "web_bounty", "web", root_override=tmp_path, refresh=False)
     assert updated["ok"]
     assert other_report.read_text() == before
-    assert Path(updated["finding"]["report_path"]) == layout.reports_root / "D01" / "REPORT.md"
+    assert Path(updated["finding"]["report_path"]) == Path(d01["report_dir"]) / "REPORT.md"

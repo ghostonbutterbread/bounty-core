@@ -318,6 +318,10 @@ def _next_fid(findings: list[dict[str, Any]], prefix: str) -> str:
             highest = max(highest, int(suffix))
     return f"{normalized_prefix}{highest + 1:02d}"
 
+def _validate_packet_fid(fid: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", fid):
+        raise ValueError("unsafe finding FID")
+
 
 def _finding_key(file_value: Any, line: Any, class_name: Any, finding_type: Any) -> tuple[str, int, str, str]:
     return (
@@ -470,6 +474,7 @@ def _merge_extra_fields(entry: dict[str, Any], finding: dict[str, Any]) -> None:
         "current",
         "snapshot_id",
         "version_label",
+        "report_dir",
     }
     for key, value in finding.items():
         if key in reserved:
@@ -700,6 +705,9 @@ def _reserve_candidate(
 
         prefix = _fid_prefix_for(finding)
         fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
+        _validate_packet_fid(fid)
+        if any(str(item.get("fid") or "") == fid for item in findings):
+            raise ValueError(f"finding FID already assigned: {fid}")
         sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
         entry = {
             "fid": fid,
@@ -749,6 +757,9 @@ def ledger_add(
 
         prefix = _fid_prefix_for(finding)
         fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
+        _validate_packet_fid(fid)
+        if any(str(item.get("fid") or "") == fid for item in findings):
+            raise ValueError(f"finding FID already assigned: {fid}")
         entry = {
             "fid": fid,
             "type": str(finding.get("type") or finding.get("title") or "Unknown finding").strip(),
@@ -912,6 +923,7 @@ _FID_PATCH_PROTECTED_FIELDS = {
     "snapshot_id",
     "version_label",
     "run_id",
+    "report_dir",
 }
 
 
@@ -947,6 +959,8 @@ def patch_finding_by_fid(
         for key, value in _normalize_patch(patch).items()
         if key not in _FID_PATCH_PROTECTED_FIELDS
     }
+    if "report_dir" in patch:
+        raise ValueError("report_dir is immutable; migrate a packet explicitly")
 
     with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root) as payload:
         findings = payload.setdefault("findings", [])
@@ -1464,6 +1478,7 @@ def _compat_sighting(finding: dict[str, Any], *, seen_at: str) -> dict[str, Any]
 
 def _ensure_v2_observation_fields(entry: dict[str, Any], *, findings: list[dict[str, Any]]) -> None:
     entry.setdefault("fid", _next_fid(findings, _fid_prefix_for(entry)))
+    _validate_packet_fid(str(entry["fid"]))
     now = str(entry.get("updated_at") or entry.get("created_at") or utc_now())
     entry.setdefault("first_seen", now)
     entry.setdefault("first_snapshot", str(entry.get("snapshot_id") or "").strip())
@@ -1602,7 +1617,7 @@ def add_finding(
             stored = normalized
         else:
             old_report_path = Path(str(existing.get("report_path"))).expanduser() if existing.get("report_path") else None
-            existing.update({k: v for k, v in normalized.items() if k not in {"created_at", "first_seen", "first_snapshot", "sightings", "fid"}})
+            existing.update({k: v for k, v in normalized.items() if k not in {"created_at", "first_seen", "first_snapshot", "sightings", "fid", "report_dir"}})
             existing.setdefault("sightings", []).append(_compat_sighting(normalized, seen_at=now))
             existing["last_seen"] = now
             existing["last_snapshot"] = str(normalized.get("snapshot_id") or existing.get("last_snapshot") or "").strip()
@@ -1678,7 +1693,7 @@ def update_finding(
     validate_packet_mode(packet_mode)
     root = _normalize_root_override(root_override, storage_root)
     layout = resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
-    protected = {"identity", "program", "family", "lane", "created_at", "first_seen", "first_snapshot", "sightings", "provenance", "fid"}
+    protected = {"identity", "program", "family", "lane", "created_at", "first_seen", "first_snapshot", "sightings", "provenance", "fid", "report_dir"}
     normalized_patch = {key: value for key, value in _normalize_patch(patch).items() if key not in protected}
     now = utc_now()
 
