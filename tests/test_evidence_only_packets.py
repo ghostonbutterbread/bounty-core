@@ -129,3 +129,69 @@ def test_missing_report_pointer_falls_back_to_existing_evidence(tmp_path):
     patched = patch_finding_by_fid("acme", "D11", {"report_path": str(missing)}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
     assert patched is not None and patched["report_path"] == str(missing)
     _assert_evidence_link(layout, "D11")
+
+
+def test_symlinked_packet_cannot_write_outside_or_register_external_report(tmp_path):
+    layout = _layout(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    packet = layout.reports_root / "D01"
+    packet.parent.mkdir(parents=True, exist_ok=True)
+    packet.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        add_finding(_source("D01"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)
+    assert not (outside / "EVIDENCE.md").exists()
+    assert not (outside / "poc").exists()
+
+    packet.unlink()
+    added = add_finding(_source("D01"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)["finding"]
+    external_report = outside / "acme-xss-D01.md"
+    external_report.write_text("# Outside\n")
+    packet.rename(tmp_path / "original-packet")
+    packet.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        record_final_finding_report("acme", "D01", packet / external_report.name, family="web_bounty", lane="web", root_override=tmp_path, refresh=False)
+    current = ledger_get("acme", added["fid"], family="web_bounty", lane="web", root_override=tmp_path)
+    assert current is not None and "report_path" not in current
+    assert external_report.read_text() == "# Outside\n"
+    packet.unlink()
+    (tmp_path / "original-packet").rename(packet)
+    linked_report = packet / external_report.name
+    linked_report.symlink_to(external_report)
+    with pytest.raises(ValueError):
+        record_final_finding_report("acme", "D01", linked_report, family="web_bounty", lane="web", root_override=tmp_path, refresh=False)
+    assert external_report.read_text() == "# Outside\n"
+
+
+def test_foreign_packet_pointer_rejected_and_legacy_update_preserves_other_fid(tmp_path):
+    layout = _layout(tmp_path)
+    d01 = add_finding(_source("D01"), root_override=tmp_path, packet_mode="evidence_only", refresh=False)["finding"]
+    d02 = add_finding({**_source("D02"), "file": "other.js"}, root_override=tmp_path, refresh=False)["finding"]
+    other_report = Path(d02["report_path"])
+    other_evidence = other_report.parent / "EVIDENCE.md"
+    before = other_report.read_text()
+    for key, foreign in (("report_path", other_report), ("evidence_path", other_evidence)):
+        with pytest.raises(ValueError):
+            patch_finding_by_fid("acme", "D01", {key: str(foreign)}, family="web_bounty", lane="web", root_override=tmp_path, packet_mode="evidence_only", refresh=True)
+        with pytest.raises(ValueError):
+            patch_finding_by_fid("acme", "D01", {key: str(foreign)}, family="web_bounty", lane="web", root_override=tmp_path)
+        current = ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)
+        assert current is not None
+        if key == "report_path":
+            assert key not in current
+        else:
+            assert current[key] == d01[key]
+
+    # A pre-existing poisoned ledger pointer must not become a cross-FID deletion
+    # when a caller switches back to the default legacy update path.
+    path = ledger_path("acme", family="web_bounty", lane="web", root_override=tmp_path)
+    payload = json.loads(path.read_text())
+    next(row for row in payload["findings"] if row["fid"] == "D01")["report_path"] = str(other_report)
+    path.write_text(json.dumps(payload))
+    refresh_report_navigation_from_ledger(layout, packet_mode="evidence_only")
+    assert "[[D01/EVIDENCE|D01]]" in (layout.reports_root / "active.md").read_text()
+    assert "[[D02/REPORT|D01]]" not in (layout.reports_root / "active.md").read_text()
+    updated = update_finding(d01["identity"], {"status": "confirmed"}, "acme", "web_bounty", "web", root_override=tmp_path, refresh=False)
+    assert updated["ok"]
+    assert other_report.read_text() == before
+    assert Path(updated["finding"]["report_path"]) == layout.reports_root / "D01" / "REPORT.md"

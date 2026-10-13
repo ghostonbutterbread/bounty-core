@@ -24,8 +24,8 @@ from .reports import (
     FINDING_REPORT_GENERATED_MARKER,
     LEGACY_PACKET,
     REPORT_NAV_GENERATED_MARKER,
-    canonical_finding_report_dir,
     ensure_finding_evidence_packet,
+    is_finding_packet_path,
     is_generated_safe_finding_report,
     refresh_report_indexes,
     validate_packet_mode,
@@ -939,7 +939,7 @@ def patch_finding_by_fid(
     root = _normalize_root_override(root_override, storage_root)
     layout = (
         resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
-        if write_report or refresh or packet_mode == EVIDENCE_ONLY
+        if write_report or refresh or packet_mode == EVIDENCE_ONLY or any(key in patch for key in ("report_path", "evidence_path"))
         else None
     )
     normalized_patch = {
@@ -959,6 +959,8 @@ def patch_finding_by_fid(
                 continue
             if str(finding.get("fid") or "").strip() != target:
                 continue
+            if layout is not None:
+                _validate_packet_pointer_patch(layout, finding, normalized_patch)
             old_report_path = Path(str(finding.get("report_path"))).expanduser() if finding.get("report_path") else None
             finding.update(normalized_patch)
             finding["fid"] = target
@@ -1003,7 +1005,7 @@ def patch_finding_by_fid(
             elif write_report and layout is not None:
                 report_path = write_finding_report(layout, finding)
                 finding["report_path"] = str(report_path)
-                _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+                _delete_report_if_under_reports_root(layout, finding, old_report_path, replacement=report_path)
             if refresh and layout is not None:
                 refresh_indexes(layout, findings)
                 refresh_report_indexes(layout, findings, packet_mode=packet_mode)
@@ -1028,9 +1030,9 @@ def record_final_finding_report(
     finding = ledger_get(program, fid, family=layout.family, lane=layout.lane, root_override=root)
     if finding is None:
         return None
-    path = Path(report_path).expanduser().resolve(strict=False)
-    packet_dir = canonical_finding_report_dir(layout, finding).resolve(strict=False)
-    if path.parent != packet_dir or path.suffix != ".md" or not path.stem.endswith(f"-{fid}") or not path.is_file():
+    path = Path(report_path).expanduser()
+    if (not is_finding_packet_path(layout.reports_root, finding, path)
+            or path.suffix != ".md" or not path.stem.endswith(f"-{fid}") or not path.is_file()):
         raise ValueError("final report must be an existing *-<FID>.md file in the finding packet")
     return patch_finding_by_fid(
         program, fid, {"report_path": str(path)}, family=layout.family, lane=layout.lane,
@@ -1398,8 +1400,21 @@ def _same_report_path(left: Any, right: Path) -> bool:
         return str(left_path) == str(right)
 
 
-def _delete_report_if_under_reports_root(layout: StorageLayout, path: Path | None, *, replacement: Path | None = None) -> None:
+def _validate_packet_pointer_patch(layout: StorageLayout, finding: dict[str, Any], patch: dict[str, Any]) -> None:
+    for key in ("report_path", "evidence_path"):
+        value = patch.get(key)
+        if value and not is_finding_packet_path(layout.reports_root, finding, Path(str(value)).expanduser()):
+            raise ValueError(f"{key} must be in the owning finding packet")
+
+def _delete_report_if_under_reports_root(layout: StorageLayout, finding: dict[str, Any], path: Path | None, *, replacement: Path | None = None) -> None:
     if path is None:
+        return
+    legacy_root = layout.reports_root / "findings"
+    legacy_path = (path.parent.parent == legacy_root
+                   and path.parent.name in ("active", "confirmed", "dormant", "completed")
+                   and path.name.startswith(f"{finding['fid']} - ")
+                   and not path.is_symlink())
+    if not (is_finding_packet_path(layout.reports_root, finding, path) or legacy_path):
         return
     try:
         candidate = path.expanduser().resolve(strict=False)
@@ -1531,7 +1546,7 @@ def _add_source_style_finding(
         elif write_report:
             report_path = write_finding_report(layout, stored)
             stored["report_path"] = str(report_path)
-            _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+            _delete_report_if_under_reports_root(layout, stored, old_report_path, replacement=report_path)
 
         if refresh:
             refresh_indexes(layout, findings)
@@ -1601,7 +1616,7 @@ def add_finding(
         elif write_report:
             report_path = write_finding_report(layout, stored)
             stored["report_path"] = str(report_path)
-            _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+            _delete_report_if_under_reports_root(layout, stored, old_report_path, replacement=report_path)
 
         if refresh:
             refresh_indexes(layout, findings)
@@ -1676,6 +1691,7 @@ def update_finding(
         if finding is None:
             return {"ok": False, "finding": {}, "layout": layout.to_dict()}
 
+        _validate_packet_pointer_patch(layout, finding, normalized_patch)
         before = {key: finding.get(key) for key in normalized_patch}
         old_report_path = Path(str(finding.get("report_path"))).expanduser() if finding.get("report_path") else None
         finding.update(normalized_patch)
@@ -1686,7 +1702,7 @@ def update_finding(
         else:
             report_path = write_finding_report(layout, finding)
             finding["report_path"] = str(report_path)
-            _delete_report_if_under_reports_root(layout, old_report_path, replacement=report_path)
+            _delete_report_if_under_reports_root(layout, finding, old_report_path, replacement=report_path)
 
         _append_jsonl_event(
             _findings_jsonl_path(layout),
