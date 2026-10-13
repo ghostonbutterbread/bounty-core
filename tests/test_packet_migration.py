@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from bounty_core import add_finding, patch_finding_by_fid, record_final_finding_report, resolve_storage
-from bounty_core.ledger import ledger_get
+from bounty_core.ledger import ledger_get, ledger_list, migrate_legacy_finding
 from bounty_core.reports import refresh_report_navigation_from_ledger
 
 
@@ -15,6 +15,38 @@ def row(**changes):
 
 def layout(root, program="acme"):
     return resolve_storage(program, family="web_bounty", lane="web", root_override=root)
+
+
+def test_legacy_row_migration_preserves_frozen_packet_pointer(tmp_path):
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    evidence = packet / "EVIDENCE.md"
+    final = packet / "acme-xss-D01.md"
+    migrated = migrate_legacy_finding({"fid": "D01", "type": "Owned XSS", "report_dir": str(packet),
+                                       "evidence_path": str(evidence), "report_path": str(final)})
+    assert migrated["report_dir"] == str(packet)
+    assert migrated["evidence_path"] == str(evidence)
+    assert migrated["report_path"] == str(final)
+
+
+def test_normalized_intake_rejects_duplicate_explicit_fid(tmp_path):
+    first = {"program": "acme", "fid": "D01", "title": "Owned XSS", "type": "xss", "asset": "first.example"}
+    second = {**first, "title": "Owned SSRF", "asset": "second.example"}
+    add_finding(first, root_override=tmp_path, packet_mode="evidence_only")
+    with pytest.raises(ValueError, match="FID already assigned"):
+        add_finding(second, root_override=tmp_path, packet_mode="evidence_only")
+    assert len(ledger_list("acme", family="web_bounty", lane="web", root_override=tmp_path)) == 1
+    assert not (layout(tmp_path).reports_root / "D01-owned-ssrf").exists()
+
+
+def test_new_packet_rejects_preexisting_descriptive_directory(tmp_path):
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    packet.mkdir(parents=True)
+    evidence = packet / "EVIDENCE.md"
+    evidence.write_text("# Unrelated prior evidence\n")
+    with pytest.raises(ValueError, match="already exists|collision"):
+        add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")
+    assert evidence.read_text() == "# Unrelated prior evidence\n"
+    assert ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path) is None
 
 
 def test_new_packet_freezes_descriptive_slug_and_uses_final_in_views(tmp_path):

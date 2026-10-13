@@ -563,6 +563,8 @@ def migrate_legacy_finding(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
     _merge_extra_fields(migrated, entry)
+    if "report_dir" in entry:
+        migrated["report_dir"] = entry["report_dir"]
     return migrated
 
 
@@ -740,8 +742,10 @@ def ledger_add(
     family: str | None = None,
     root_override: str | Path | None = None,
     storage_root: str | Path | None = None,
+    packet_mode: str = LEGACY_PACKET,
 ) -> tuple[bool, str | None]:
     """Add or update a finding. Returns (is_new_fid, fid). Dedup is global across snapshots."""
+    validate_packet_mode(packet_mode)
     with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
         findings = payload.setdefault("findings", [])
         if not isinstance(findings, list):
@@ -775,6 +779,10 @@ def ledger_add(
             "current": _current_from_sightings([sighting]),
         }
         _merge_extra_fields(entry, finding)
+        if packet_mode == EVIDENCE_ONLY:
+            layout = resolve_storage(program, family=family, lane=lane,
+                                     root_override=_normalize_root_override(root_override, storage_root), create=True)
+            ensure_finding_evidence_packet(layout, entry)
         findings.append(entry)
         return True, fid
 
@@ -1526,6 +1534,7 @@ def _add_source_style_finding(
         family=entry["family"],
         lane=entry["lane"],
         root_override=root,
+        packet_mode=packet_mode,
     )
     if not fid:
         raise ValueError("ledger_add did not return a fid")
@@ -1613,6 +1622,8 @@ def add_finding(
         now = str(normalized.get("updated_at") or utc_now())
         if existing is None:
             _ensure_v2_observation_fields(normalized, findings=findings)
+            if any(str(item.get("fid") or "") == str(normalized["fid"]) for item in findings):
+                raise ValueError(f"finding FID already assigned: {normalized['fid']}")
             findings.append(normalized)
             stored = normalized
         else:

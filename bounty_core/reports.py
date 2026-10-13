@@ -661,7 +661,10 @@ def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any
             finding["report_dir"] = str(old)
         else:
             slug = re.sub(r"[^a-z0-9]+", "-", _title_for(finding).lower()).strip("-")[:80].rstrip("-") or "finding"
-            finding["report_dir"] = str(layout.reports_root / f"{fid}-{slug}")
+            candidate = layout.reports_root / f"{fid}-{slug}"
+            if candidate.exists() or candidate.is_symlink():
+                raise ValueError(f"finding packet already exists: {candidate}")
+            finding["report_dir"] = str(candidate)
     packet_dir = _ensure_finding_packet(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
     finding["evidence_path"] = str(evidence_path)

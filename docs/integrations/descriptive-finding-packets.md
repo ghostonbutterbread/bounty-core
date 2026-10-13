@@ -1,6 +1,6 @@
 # Descriptive finding packets integration dossier
 
-- **Status:** feature (independent review pending)
+- **Status:** feature (targeted reviewer blockers fixed; independent re-review pending)
 - **Owner:** Bounty Core provider implementation
 - **Branch / owning ref:** `feat/report-packet-fid-slug-tf9946642`
 - **Worktree:** `/home/ryushe/worktrees/bounty-core-report-packets-tf9946642`
@@ -20,22 +20,23 @@ Evidence-only navigation creates class and severity indexes only when populated,
 ## Evidence and review
 
 - RED: `python -m pytest tests/test_packet_migration.py -q` initially 3 failed / 2 passed (missing descriptive packet, eager daily tree, report_dir mutation). Unsafe-FID ledger persistence regression independently failed before its fix.
-- GREEN: `python -m pytest -q --tb=short` — 174 passed after README and provider changes; `git diff --check` clean.
-- Source-style and normalized intake, legacy default reporting, old FID-only packets, historical authored content, final registration, submission reversal, class/severity links, title freeze, symlink/cross-FID negatives covered with isolated `tmp_path` roots. No production Shared writes or network actions.
-- Independent review: pending parent/reviewer; do not merge/push here.
+- GREEN: initial `python -m pytest -q --tb=short` — 174 passed. Independent review blocked beta on three defects: no-sightings legacy normalization dropped `report_dir`; normalized intake allowed duplicate explicit FID; a fresh source-style FID could adopt an existing descriptive packet after ledger allocation.
+- Targeted correction: added three red tests in `tests/test_packet_migration.py`, then preserved legacy `report_dir`, rejected duplicate normalized FIDs, and allocated source-style evidence-only packets under the FID lock before persisting the new row. Preexisting descriptive packets now raise without adopting content or leaving a ledger row. Corrected tests `12 passed`; full `python3 -m pytest -q --tb=short` — **177 passed**; BBH source-contract smoke (six focused files) — **130 passed, 13 subtests passed**. One initial full-suite invocation timed out at 180 seconds; rerun at 600 seconds completed in 15.90 seconds. `git diff --check` and independent re-review pending.
+- Evidence-only mode creates no daily/matrix navigation. Legacy default mode retains daily/index generation deliberately for existing source-team consumers; this is a compatibility boundary, not the new default web route. Removing legacy generation requires a distinct approved migration of those consumers.
+- Source-style and normalized intake, legacy default reporting, old FID-only packets, historical authored content, final registration, submission reversal, class/severity links, title freeze, symlink/cross-FID negatives covered with isolated `tmp_path` roots. No production Shared writes.
 - Merge/ancestry: feature based on fetched `origin/beta` above; integration/pin not performed.
 
 ## Blockers and deferred work
 
-- **Missing evidence:** BBH consumer tests against this committed provider revision and independent diff review.
-- **Command/fixture:** BBH disposable-root `pytest agents/test_finding_report.py agents/test_manual_hunter.py agents/test_sync_reports.py agents/test_base_team_review.py -q`, then consumer environment reinstallation from its immutable provider pin.
-- **Trigger:** provider review/integration and published full commit; no production Shared migration automatically.
-- **Why:** BBH still assumes the previous FID-only folder until its consumer changes and pin are integrated.
-- **Next:** parent reviews provider diff; then provider beta integration/publish, BBH pin/consumer verification. Historical populated legacy folders remain read-only unless separately approved for cleanup.
+- **Missing evidence:** independent acceptance re-review of three targeted fixes, then BBH consumer tests against installed immutable provider revision.
+- **Command/fixture:** Bounty Core `python3 -m pytest -q --tb=short`; BBH disposable-root `pytest agents/test_finding_report.py agents/test_manual_hunter.py agents/test_sync_reports.py agents/test_dynamic_validation.py agents/test_report_checker.py agents/test_base_team_review.py -q` against its pinned/reinstalled Core.
+- **Trigger:** reviewer accepts the corrective commit; provider beta is published and pinned.
+- **Why:** BBH still imports the old installed Core revision until its manifest and checkout-local environment are updated.
+- **Next:** independent reviewer checks correction diff; parent reconciles fetched beta, merges/pushes provider if accepted, pins/installs BBH, runs full E2E. Historical populated legacy folders remain read-only unless separately approved for cleanup.
 
 ## Handoff and gates
 
-- **Exact resume point:** review feature diff and test receipts; reconcile any advanced `origin/beta`, run tests, then integrate only if review accepts. Parent owns merge/push/pin.
+- **Exact resume point:** independent re-review of three blocker fixes on feature tip; reconcile advanced `origin/beta`, rerun tests, then integrate only if review accepts. Parent owns merge/push/pin.
 - **Working tree at handoff:** clean after final dossier-only commit; verify feature tip separately from the checkpoint above.
 - **Integration gate:** independent review, full suite green, branch reconciliation.
 - **Activation gate:** BBH immutable provider pin and installed provenance plus disposable-root tests.
