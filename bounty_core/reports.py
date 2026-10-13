@@ -21,6 +21,8 @@ FINDING_REPORT_CHECKSUM_RE = re.compile(r"^<!-- generated-checksum: sha256:([0-9
 LEGACY_FINDINGS_DIRNAME = "findings"
 REPORT_FILENAME = "REPORT.md"
 EVIDENCE_FILENAME = "EVIDENCE.md"
+EVIDENCE_ONLY = "evidence_only"
+LEGACY_PACKET = "legacy"
 FINALIZED_REPORT_FILENAME = "FINALIZED.md"
 POC_DIRNAME = "poc"
 EVIDENCE_DIRNAME = "evidence"
@@ -171,6 +173,29 @@ def canonical_finding_report_dir(layout: StorageLayout, finding: dict[str, Any])
 def canonical_finding_report_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     return canonical_finding_report_dir(layout, finding) / REPORT_FILENAME
 
+def canonical_finding_evidence_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    return canonical_finding_report_dir(layout, finding) / EVIDENCE_FILENAME
+
+def is_finding_packet_path(reports_root: Path, finding: dict[str, Any], path: Path) -> bool:
+    """Reject symlink escapes and pointers into another finding's packet."""
+    packet = reports_root / _safe_fid_for(finding)
+    try:
+        return (not packet.is_symlink() and not path.is_symlink()
+                and path.parent == packet
+                and path.resolve(strict=False).parent == packet.resolve(strict=False))
+    except (OSError, RuntimeError):
+        return False
+
+def _is_legacy_report_for_fid(reports_root: Path, finding: dict[str, Any], path: Path) -> bool:
+    return (path.parent.parent == reports_root / LEGACY_FINDINGS_DIRNAME
+            and path.parent.name in LIFECYCLE_BUCKETS
+            and path.name.startswith(f"{_safe_fid_for(finding)} - ")
+            and not path.is_symlink() and _is_under(path, reports_root))
+
+def validate_packet_mode(packet_mode: str) -> None:
+    if packet_mode not in (LEGACY_PACKET, EVIDENCE_ONLY):
+        raise ValueError(f"unsupported packet mode: {packet_mode!r}")
+
 
 def canonical_finalized_report_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     return canonical_finding_report_dir(layout, finding) / FINALIZED_REPORT_FILENAME
@@ -298,7 +323,7 @@ def safe_symlink_or_link_stub(link_path: Path, target_path: Path, *, reports_roo
                 CATEGORY_STUB_GENERATED_MARKER,
                 f"# {target_path.stem}",
                 "",
-                f"Canonical finding: {canonical_report_wikilink(target_path, target_path.stem)}",
+                f"Canonical finding: {obsidian_report_link(link_path, target_path, target_path.stem)}",
                 "",
             ]
         )
@@ -476,10 +501,13 @@ def _candidate_paths_for_fid(layout: StorageLayout, finding: dict[str, Any]) -> 
     for key in ("report_path", "finalized_report_path"):
         current = finding.get(key)
         if current:
-            candidates.append(Path(str(current)).expanduser())
+            candidate = Path(str(current)).expanduser()
+            if (is_finding_packet_path(layout.reports_root, finding, candidate)
+                    or _is_legacy_report_for_fid(layout.reports_root, finding, candidate)):
+                candidates.append(candidate)
     findings_root = layout.reports_root / LEGACY_FINDINGS_DIRNAME
     packet_report = canonical_finding_report_path(layout, finding)
-    if packet_report.exists():
+    if packet_report.exists() and is_finding_packet_path(layout.reports_root, finding, packet_report):
         candidates.append(packet_report)
     if findings_root.is_dir():
         # Legacy lifecycle folders are read/migration inputs only. New writes go
@@ -569,9 +597,11 @@ def _preserve_hand_edited_report(layout: StorageLayout, finding: dict[str, Any],
 def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create the stable, agent-facing container for a finding report."""
     packet_dir = canonical_finding_report_dir(layout, finding)
+    evidence_path = packet_dir / EVIDENCE_FILENAME
+    if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
+        raise ValueError("finding packet and evidence must not be symlinks")
     for child in (packet_dir, packet_dir / POC_DIRNAME, packet_dir / EVIDENCE_DIRNAME, packet_dir / META_DIRNAME):
         child.mkdir(parents=True, exist_ok=True)
-    evidence_path = packet_dir / EVIDENCE_FILENAME
     # Free-form ledger evidence may contain secrets (including quoted variants).
     # Carry a count and the canonical source pointer, never copy its raw contents.
     leads = finding.get("evidence") or []
@@ -606,6 +636,13 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
         pass  # Create-only: never replace hand-edited evidence, including on backfill.
     finding["report_dir"] = str(packet_dir)
     return packet_dir
+
+def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Create only the packet directories and EVIDENCE.md; never touch report files."""
+    packet_dir = _ensure_finding_packet(layout, finding)
+    evidence_path = packet_dir / EVIDENCE_FILENAME
+    finding["evidence_path"] = str(evidence_path)
+    return evidence_path
 
 
 def write_finding_report(layout: StorageLayout, finding: dict[str, Any]) -> Path:
@@ -672,6 +709,8 @@ def _canonical_link_for(index_path: Path, finding: dict[str, Any]) -> str:
     reports_root = _reports_root_for(index_path) or index_path.parent
     target = _report_path_for_navigation(reports_root, finding)
     label = str(finding.get("fid") or finding.get("harness_fid") or _title_for(finding)).strip()
+    if finding.get("evidence_path"):
+        return obsidian_report_link(index_path, target, label)
     return canonical_report_wikilink(target, label)
 
 
@@ -679,7 +718,16 @@ def _report_path_for_navigation(reports_root: Path, finding: dict[str, Any]) -> 
     report_path = finding.get("report_path")
     if report_path:
         candidate = Path(str(report_path)).expanduser()
-        if _is_under(candidate, reports_root):
+        if (is_finding_packet_path(reports_root, finding, candidate)
+                or _is_legacy_report_for_fid(reports_root, finding, candidate)) and (candidate.is_file() or not finding.get("evidence_path")):
+            return candidate
+    evidence_path = finding.get("evidence_path")
+    if evidence_path:
+        candidate = Path(str(evidence_path)).expanduser()
+        if candidate == reports_root / _safe_fid_for(finding) / EVIDENCE_FILENAME and is_finding_packet_path(reports_root, finding, candidate) and candidate.is_file():
+            canonical_report = _canonical_finding_report_path_for_reports_root(reports_root, finding)
+            if is_finding_packet_path(reports_root, finding, canonical_report) and canonical_report.is_file():
+                return canonical_report
             return candidate
     return _canonical_finding_report_path_for_reports_root(reports_root, finding)
 
@@ -1199,7 +1247,11 @@ def _cleanup_stale_legacy_indexes(
                 index_path.unlink()
 
 
-def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]) -> dict[str, Path]:
+def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]], *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
+    validate_packet_mode(packet_mode)
+    if packet_mode == EVIDENCE_ONLY:
+        for finding in findings:
+            ensure_finding_evidence_packet(layout, finding)
     written: dict[str, Path] = {}
     by_status: dict[str, list[dict[str, Any]]] = {}
     by_type: dict[str, list[dict[str, Any]]] = {}
@@ -1250,7 +1302,8 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
     return written
 
 
-def refresh_report_navigation_from_ledger(layout: StorageLayout) -> dict[str, Path]:
+def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
+    validate_packet_mode(packet_mode)
     import json
 
     ledger_path = layout.ledgers_root / "ledger.json"
@@ -1260,8 +1313,11 @@ def refresh_report_navigation_from_ledger(layout: StorageLayout) -> dict[str, Pa
     findings = payload.get("findings", []) if isinstance(payload, dict) else []
     rows = [item for item in findings if isinstance(item, dict)]
     for finding in rows:
-        report_path = write_finding_report(layout, finding)
-        finding["report_path"] = str(report_path)
+        if packet_mode == EVIDENCE_ONLY:
+            ensure_finding_evidence_packet(layout, finding)
+        else:
+            report_path = write_finding_report(layout, finding)
+            finding["report_path"] = str(report_path)
     if isinstance(payload, dict):
         ledger_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    return refresh_report_indexes(layout, rows)
+    return refresh_report_indexes(layout, rows, packet_mode=packet_mode)

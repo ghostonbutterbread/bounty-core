@@ -10,10 +10,11 @@ from .ledger import (
     get_finding,
     list_findings,
     patch_finding_by_fid,
+    record_final_finding_report,
     update_finding,
 )
 from .recon import ReconRun, start_run, write_manifest
-from .reports import canonical_finalized_report_path, canonical_finding_report_dir, canonical_finding_report_path, finalize_finding_report
+from .reports import canonical_finalized_report_path, canonical_finding_evidence_path, canonical_finding_report_dir, canonical_finding_report_path, finalize_finding_report, refresh_report_navigation_from_ledger
 from .storage import StorageLayout, resolve_family_lane, resolve_storage
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "append_event",
     "add_finding",
     "canonical_finalized_report_path",
+    "canonical_finding_evidence_path",
     "canonical_finding_report_dir",
     "canonical_finding_report_path",
     "finalize_finding_report",
@@ -32,6 +34,8 @@ __all__ = [
     "list_findings",
     "normalize_finding",
     "patch_finding_by_fid",
+    "record_final_finding_report",
+    "refresh_report_navigation_from_ledger",
     "read_events",
     "redact_event_value",
     "resolve_family_lane",
