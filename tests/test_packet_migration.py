@@ -2,6 +2,7 @@
 from pathlib import Path
 import pytest
 import bounty_core.ledger as ledger_module
+import bounty_core.reports as reports_module
 
 from bounty_core import add_finding, patch_finding_by_fid, record_final_finding_report, resolve_storage
 from bounty_core.ledger import ledger_get, ledger_list, migrate_legacy_finding
@@ -117,6 +118,57 @@ def test_packet_phase_ledger_write_failure_is_retryable(tmp_path, monkeypatch):
     retried = add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")["finding"]
     assert retried["report_dir"] == str(packet)
     assert (packet / "EVIDENCE.md").is_file()
+
+
+def test_bulk_refresh_commits_packet_pointer_before_creating_packet(tmp_path, monkeypatch):
+    add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="legacy", write_report=False, refresh=False)
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    original = ledger_module._write_json_atomic
+    attempts = 0
+
+    def fail_once(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic bulk ledger write interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(ledger_module, "_write_json_atomic", fail_once)
+    with pytest.raises(OSError, match="synthetic bulk ledger write interruption"):
+        refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    assert not packet.exists()
+    stored = ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None and not stored.get("report_dir")
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    stored = ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None and stored["report_dir"] == str(packet)
+    assert (packet / "EVIDENCE.md").is_file()
+
+
+@pytest.mark.parametrize("finding", [row(title="Owned XSS"),
+                                    {"program": "acme", "fid": "D01", "title": "Owned XSS", "type": "xss", "asset": "first.example"}])
+def test_interrupted_evidence_publish_retries_without_empty_file(tmp_path, monkeypatch, finding):
+    original = reports_module.os.link
+    attempts = 0
+
+    def fail_once(source, target, *args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic evidence publish interruption")
+        return original(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(reports_module.os, "link", fail_once)
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    with pytest.raises(OSError, match="synthetic evidence publish interruption"):
+        add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")
+    stored = ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None and stored["report_dir"] == str(packet)
+    assert not (packet / "EVIDENCE.md").exists()
+    assert list(packet.glob(".EVIDENCE.md.*.tmp")) == []
+    retried = add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert retried["report_dir"] == str(packet)
+    assert (packet / "EVIDENCE.md").read_text(encoding="utf-8").startswith("# D01 — evidence")
 
 
 def test_new_packet_freezes_descriptive_slug_and_uses_final_in_views(tmp_path):

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import tempfile
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -621,8 +623,13 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
     # Carry a count and the canonical source pointer, never copy its raw contents.
     leads = finding.get("evidence") or []
     lead_count = len(leads) if isinstance(leads, (list, tuple)) else 1
+    if evidence_path.exists():
+        finding["report_dir"] = str(packet_dir)
+        return packet_dir
+    temp_path: Path | None = None
     try:
-        with evidence_path.open("x", encoding="utf-8") as stream:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix=".EVIDENCE.md.", suffix=".tmp", dir=packet_dir, delete=False) as stream:
+            temp_path = Path(stream.name)
             stream.write(
                 f"# {_finding_fid(finding)} — evidence for {_title_for(finding)}\n\n"
                 "Initial ledger references are unverified leads, not proof of a completed claim.\n\n"
@@ -647,8 +654,16 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
                 "## Open questions / dated corrections\n\n"
                 "Pending: name the next discriminator or a concrete blocker.\n"
             )
-    except FileExistsError:
-        pass  # Create-only: never replace hand-edited evidence, including on backfill.
+        try:
+            os.link(temp_path, evidence_path)
+        except FileExistsError:
+            if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
+                raise ValueError("finding packet and evidence must not be symlinks")
+            # Another writer won: never replace existing evidence.
+            pass
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     finding["report_dir"] = str(packet_dir)
     return packet_dir
 
@@ -1364,20 +1379,27 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
 
 def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     validate_packet_mode(packet_mode)
-    import json
+    # Import locally: ledger imports the report helpers at module initialization.
+    from .ledger import _locked_payload
 
     ledger_path = layout.ledgers_root / "ledger.json"
     if not ledger_path.exists():
         return refresh_report_indexes(layout, [], packet_mode=packet_mode)
-    payload = json.loads(ledger_path.read_text(encoding="utf-8"))
-    findings = payload.get("findings", []) if isinstance(payload, dict) else []
-    rows = [item for item in findings if isinstance(item, dict)]
-    for finding in rows:
+    lock_kwargs = {"family": layout.family, "lane": layout.lane, "root_override": layout.base_root, "exclusive": True}
+    with _locked_payload(layout.program, **lock_kwargs) as payload:
+        rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
         if packet_mode == EVIDENCE_ONLY:
-            ensure_finding_evidence_packet(layout, finding)
+            # Persist all packet reservations before materializing any packet.
+            # A failed ledger commit therefore leaves no orphan to block retry.
+            for finding in rows:
+                reserve_finding_evidence_packet(layout, finding)
         else:
-            report_path = write_finding_report(layout, finding)
-            finding["report_path"] = str(report_path)
-    if isinstance(payload, dict):
-        ledger_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    return refresh_report_indexes(layout, rows, packet_mode=packet_mode)
+            for finding in rows:
+                report_path = write_finding_report(layout, finding)
+                finding["report_path"] = str(report_path)
+            return refresh_report_indexes(layout, rows, packet_mode=packet_mode)
+    with _locked_payload(layout.program, **lock_kwargs) as payload:
+        rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
+        for finding in rows:
+            ensure_finding_evidence_packet(layout, finding)
+        return refresh_report_indexes(layout, rows, packet_mode=packet_mode)
