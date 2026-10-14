@@ -1,6 +1,6 @@
 # Descriptive finding packets integration dossier
 
-- **Status:** feature (single-lock bulk-refresh concurrency correction ready for independent re-review)
+- **Status:** accepted feature (independent no-edit review of `180ebd0`; beta integration pending)
 - **Owner:** Bounty Core provider implementation
 - **Branch / owning ref:** `feat/report-packet-fid-slug-tf9946642`
 - **Worktree:** `/home/ryushe/worktrees/bounty-core-report-packets-tf9946642`
@@ -31,17 +31,17 @@ Evidence-only navigation creates class and severity indexes only when populated,
 
 ## Blockers and deferred work
 
-- **Missing evidence:** independent acceptance re-review of single-lock bulk refresh, then BBH consumer tests against installed immutable provider revision.
+- **Missing evidence:** BBH consumer tests against an installed immutable provider beta revision; provider independent no-edit acceptance passed `180ebd0` with **184 full / 54 focused tests** and clean diff.
 - **Command/fixture:** Bounty Core `python3 -m pytest -q --tb=short`; BBH disposable-root `pytest agents/test_finding_report.py agents/test_manual_hunter.py agents/test_sync_reports.py agents/test_dynamic_validation.py agents/test_report_checker.py agents/test_base_team_review.py -q` against its pinned/reinstalled Core.
-- **Trigger:** reviewer accepts the corrective commit; provider beta is published and pinned.
+- **Trigger:** publish reviewed provider beta, pin its full reachable SHA in BBH and reinstall BBH checkout-local dependencies.
 - **Why:** BBH still imports the old installed Core revision until its manifest and checkout-local environment are updated.
-- **Next:** independent reviewer checks correction diff; parent reconciles fetched beta, merges/pushes provider if accepted, pins/installs BBH, runs full E2E. Historical populated legacy folders remain read-only unless separately approved for cleanup.
+- **Next:** merge/push reviewed provider into fetched beta, pin/install BBH, run installed E2E. Historical populated legacy folders remain read-only unless separately approved for cleanup.
 
 ## Handoff and gates
 
-- **Exact resume point:** independent re-review of single-lock bulk refresh on feature tip; reconcile advanced `origin/beta`, rerun tests, then integrate only if review accepts. Parent owns merge/push/pin.
+- **Exact resume point:** reconcile fetched provider beta, merge reviewed feature, retire dossier from beta, run suite, push/readback; then BBH immutable pin and installed E2E.
 - **Working tree at handoff:** clean after final dossier-only commit; verify feature tip separately from the checkpoint above.
 - **Integration gate:** independent review, full suite green, branch reconciliation.
 - **Activation gate:** BBH immutable provider pin and installed provenance plus disposable-root tests.
 - **Promotion gate:** explicit separate decision; no production Shared migration.
-- **Decision:** 2026-10-13 — implemented and tested as feature branch; no merge/push.
+- **Decision:** 2026-10-13 — independent no-edit provider acceptance of implementation `180ebd0` after 184 full and 54 focused tests; beta publication pending.
