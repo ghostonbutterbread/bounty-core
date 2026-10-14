@@ -21,6 +21,33 @@ def layout(root, program="acme"):
     return resolve_storage(program, family="web_bounty", lane="web", root_override=root)
 
 
+def test_new_evidence_packet_keeps_poc_at_packet_root_without_empty_attachment_folders(tmp_path):
+    finding = add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    packet = Path(finding["report_dir"])
+    assert (packet / "EVIDENCE.md").is_file()
+    assert not (packet / "poc").exists()
+    assert not (packet / "evidence").exists()
+    text = (packet / "EVIDENCE.md").read_text(encoding="utf-8")
+    assert "`poc.<ext>` alongside this file" in text
+    assert "optional `evidence/`" in text
+    (packet / "poc.py").write_text("# standalone reproduction\n", encoding="utf-8")
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    assert (packet / "poc.py").read_text(encoding="utf-8") == "# standalone reproduction\n"
+    assert not (packet / "poc").exists()
+
+
+def test_refresh_keeps_existing_historical_attachment_directories(tmp_path):
+    finding = add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    packet = Path(finding["report_dir"])
+    for name in ("poc", "evidence"):
+        folder = packet / name
+        folder.mkdir()
+        (folder / "authored.txt").write_text("keep\n", encoding="utf-8")
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    for name in ("poc", "evidence"):
+        assert (packet / name / "authored.txt").read_text(encoding="utf-8") == "keep\n"
+
+
 def test_legacy_row_migration_preserves_frozen_packet_pointer(tmp_path):
     packet = layout(tmp_path).reports_root / "D01-owned-xss"
     evidence = packet / "EVIDENCE.md"

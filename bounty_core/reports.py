@@ -26,8 +26,6 @@ EVIDENCE_FILENAME = "EVIDENCE.md"
 EVIDENCE_ONLY = "evidence_only"
 LEGACY_PACKET = "legacy"
 FINALIZED_REPORT_FILENAME = "FINALIZED.md"
-POC_DIRNAME = "poc"
-EVIDENCE_DIRNAME = "evidence"
 META_DIRNAME = "_meta"
 DAILY_DIRNAME = "daily"
 CATEGORIES_DIRNAME = "categories"
@@ -617,7 +615,7 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
     evidence_path = packet_dir / EVIDENCE_FILENAME
     if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
         raise ValueError("finding packet and evidence must not be symlinks")
-    for child in (packet_dir, packet_dir / POC_DIRNAME, packet_dir / EVIDENCE_DIRNAME, packet_dir / META_DIRNAME):
+    for child in (packet_dir, packet_dir / META_DIRNAME):
         child.mkdir(parents=True, exist_ok=True)
     # Free-form ledger evidence may contain secrets (including quoted variants).
     # Carry a count and the canonical source pointer, never copy its raw contents.
@@ -648,7 +646,7 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
                 "## Reproduction variants, controls, and failed attempts\n\n"
                 "Pending: link representative Attempts, not copied payload history.\n\n"
                 "## PoC and artifact references\n\n"
-                "Pending: add sanitized paths under `evidence/` and an applicable PoC under `poc/`.\n\n"
+                "Pending: cite sanitized observations here (use optional `evidence/` for attachments); put a standalone `poc.<ext>` alongside this file when needed.\n\n"
                 "## Remediation candidates\n\n"
                 "Pending: fix the demonstrated cause.\n\n"
                 "## Open questions / dated corrections\n\n"
