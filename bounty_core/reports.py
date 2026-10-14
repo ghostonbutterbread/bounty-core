@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import tempfile
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -167,7 +169,22 @@ def canonical_finding_report_dir(layout: StorageLayout, finding: dict[str, Any])
     Lifecycle and severity are intentionally projections, not directory names:
     a status transition must never invalidate a ledger pointer.
     """
-    return layout.reports_root / _safe_fid_for(finding)
+    return _packet_dir(layout.reports_root, finding)
+
+def _packet_dir(reports_root: Path, finding: dict[str, Any]) -> Path:
+    fid = _finding_fid(finding)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", fid):
+        raise ValueError("unsafe finding FID")
+    stored = finding.get("report_dir")
+    if stored:
+        packet = Path(str(stored)).expanduser()
+    else:
+        packet = reports_root / fid
+    if (packet.parent != reports_root or
+            not (packet.name == fid or re.fullmatch(re.escape(fid) + r"-[a-z0-9]+(?:-[a-z0-9]+)*", packet.name)) or
+            packet.is_symlink() or packet.resolve(strict=False).parent != reports_root.resolve(strict=False)):
+        raise ValueError("report_dir must be an exact-FID packet inside reports_root")
+    return packet
 
 
 def canonical_finding_report_path(layout: StorageLayout, finding: dict[str, Any]) -> Path:
@@ -178,12 +195,12 @@ def canonical_finding_evidence_path(layout: StorageLayout, finding: dict[str, An
 
 def is_finding_packet_path(reports_root: Path, finding: dict[str, Any], path: Path) -> bool:
     """Reject symlink escapes and pointers into another finding's packet."""
-    packet = reports_root / _safe_fid_for(finding)
     try:
+        packet = _packet_dir(reports_root, finding)
         return (not packet.is_symlink() and not path.is_symlink()
                 and path.parent == packet
                 and path.resolve(strict=False).parent == packet.resolve(strict=False))
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return False
 
 def _is_legacy_report_for_fid(reports_root: Path, finding: dict[str, Any], path: Path) -> bool:
@@ -202,7 +219,7 @@ def canonical_finalized_report_path(layout: StorageLayout, finding: dict[str, An
 
 
 def _canonical_finding_report_path_for_reports_root(reports_root: Path, finding: dict[str, Any]) -> Path:
-    return reports_root / _safe_fid_for(finding) / REPORT_FILENAME
+    return _packet_dir(reports_root, finding) / REPORT_FILENAME
 
 
 def severity_report_index_path(layout: StorageLayout, severity: str) -> Path:
@@ -606,8 +623,13 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
     # Carry a count and the canonical source pointer, never copy its raw contents.
     leads = finding.get("evidence") or []
     lead_count = len(leads) if isinstance(leads, (list, tuple)) else 1
+    if evidence_path.exists():
+        finding["report_dir"] = str(packet_dir)
+        return packet_dir
+    temp_path: Path | None = None
     try:
-        with evidence_path.open("x", encoding="utf-8") as stream:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix=".EVIDENCE.md.", suffix=".tmp", dir=packet_dir, delete=False) as stream:
+            temp_path = Path(stream.name)
             stream.write(
                 f"# {_finding_fid(finding)} — evidence for {_title_for(finding)}\n\n"
                 "Initial ledger references are unverified leads, not proof of a completed claim.\n\n"
@@ -632,13 +654,38 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
                 "## Open questions / dated corrections\n\n"
                 "Pending: name the next discriminator or a concrete blocker.\n"
             )
-    except FileExistsError:
-        pass  # Create-only: never replace hand-edited evidence, including on backfill.
+        try:
+            os.link(temp_path, evidence_path)
+        except FileExistsError:
+            if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
+                raise ValueError("finding packet and evidence must not be symlinks")
+            # Another writer won: never replace existing evidence.
+            pass
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     finding["report_dir"] = str(packet_dir)
     return packet_dir
 
+def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Select a fresh or historical packet path without writing packet files."""
+    if not finding.get("report_dir"):
+        fid = _finding_fid(finding)
+        old = layout.reports_root / fid
+        if old.exists() or old.is_symlink():
+            finding["report_dir"] = str(old)
+        else:
+            slug = re.sub(r"[^a-z0-9]+", "-", _title_for(finding).lower()).strip("-")[:80].rstrip("-") or "finding"
+            candidate = layout.reports_root / f"{fid}-{slug}"
+            if candidate.exists() or candidate.is_symlink():
+                raise ValueError(f"finding packet already exists: {candidate}")
+            finding["report_dir"] = str(candidate)
+    return canonical_finding_report_dir(layout, finding)
+
+
 def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create only the packet directories and EVIDENCE.md; never touch report files."""
+    reserve_finding_evidence_packet(layout, finding)
     packet_dir = _ensure_finding_packet(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
     finding["evidence_path"] = str(evidence_path)
@@ -724,7 +771,7 @@ def _report_path_for_navigation(reports_root: Path, finding: dict[str, Any]) -> 
     evidence_path = finding.get("evidence_path")
     if evidence_path:
         candidate = Path(str(evidence_path)).expanduser()
-        if candidate == reports_root / _safe_fid_for(finding) / EVIDENCE_FILENAME and is_finding_packet_path(reports_root, finding, candidate) and candidate.is_file():
+        if is_finding_packet_path(reports_root, finding, candidate) and candidate.is_file():
             canonical_report = _canonical_finding_report_path_for_reports_root(reports_root, finding)
             if is_finding_packet_path(reports_root, finding, canonical_report) and canonical_report.is_file():
                 return canonical_report
@@ -1117,11 +1164,13 @@ def _cleanup_stale_category_entries(categories_root: Path, desired: dict[str, st
             pass
 
 
-def _write_category_views(layout: StorageLayout, findings: list[dict[str, Any]]) -> dict[str, Path]:
+def _write_category_views(layout: StorageLayout, findings: list[dict[str, Any]], *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     categories_root = layout.reports_root / CATEGORIES_DIRNAME
     by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
     desired: dict[str, str] = {}
     for finding in _navigation_rows(findings):
+        if packet_mode == EVIDENCE_ONLY and not finding.get("report_category"):
+            finding = {**finding, "report_category": finding.get("class_name") or finding.get("vuln_class") or "other"}
         fid = str(finding.get("fid") or finding.get("harness_fid") or "").strip()
         if not fid:
             continue
@@ -1178,7 +1227,7 @@ def _write_global_lifecycle_views(layout: StorageLayout, findings: list[dict[str
     return written
 
 
-def _write_severity_views(layout: StorageLayout, findings: list[dict[str, Any]]) -> dict[str, Path]:
+def _write_severity_views(layout: StorageLayout, findings: list[dict[str, Any]], *, only_nonempty: bool = False) -> dict[str, Path]:
     by_severity: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in SEVERITY_VIEW_BUCKETS}
     for finding in _navigation_rows(findings):
         group = _severity_group_for(finding).lower()
@@ -1189,6 +1238,10 @@ def _write_severity_views(layout: StorageLayout, findings: list[dict[str, Any]])
     for bucket in SEVERITY_VIEW_BUCKETS:
         rows = by_severity[bucket]
         path = severity_report_index_path(layout, bucket)
+        if not rows and only_nonempty:
+            if _is_generated_navigation_file(path):
+                path.unlink()
+            continue
         lines = [
             REPORT_NAV_GENERATED_MARKER,
             f"# {bucket.title()} Severity Findings",
@@ -1201,6 +1254,22 @@ def _write_severity_views(layout: StorageLayout, findings: list[dict[str, Any]])
             written[f"severity/{bucket}"] = path
     return written
 
+
+def _write_submitted_view(layout: StorageLayout, findings: list[dict[str, Any]]) -> dict[str, Path]:
+    path = layout.reports_root / "submitted" / "index.md"
+    rows = [finding for finding in findings if isinstance(finding.get("submission"), dict)
+            and finding["submission"].get("state") == "submitted"]
+    if not rows:
+        if _is_generated_navigation_file(path):
+            path.unlink()
+        if path.parent.is_dir():
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass  # Hand-authored content keeps the historical directory.
+        return {}
+    text = "\n".join([REPORT_NAV_GENERATED_MARKER, "# Submitted Findings", "", *_severity_grouped_link_lines(path, rows)]).rstrip() + "\n"
+    return {"submitted": path} if _write_generated_navigation(path, text) else {}
 
 def write_legacy_deprecation_markers(layout: StorageLayout) -> dict[str, Path]:
     written: dict[str, Path] = {}
@@ -1252,6 +1321,11 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
     if packet_mode == EVIDENCE_ONLY:
         for finding in findings:
             ensure_finding_evidence_packet(layout, finding)
+        written = _write_global_lifecycle_views(layout, findings)
+        written.update(_write_category_views(layout, findings, packet_mode=packet_mode))
+        written.update(_write_severity_views(layout, findings, only_nonempty=True))
+        written.update(_write_submitted_view(layout, findings))
+        return written
     written: dict[str, Path] = {}
     by_status: dict[str, list[dict[str, Any]]] = {}
     by_type: dict[str, list[dict[str, Any]]] = {}
@@ -1297,6 +1371,7 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
     written.update(_write_daily_groups(layout, findings))
     written.update(_write_category_views(layout, findings))
     written.update(_write_severity_views(layout, findings))
+    written.update(_write_submitted_view(layout, findings))
     written.update(write_legacy_deprecation_markers(layout))
     _cleanup_stale_legacy_indexes(layout, statuses, vuln_types, status_type)
     return written
@@ -1304,20 +1379,28 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
 
 def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     validate_packet_mode(packet_mode)
-    import json
+    # Import locally: ledger imports the report helpers at module initialization.
+    from .ledger import _locked_payload, _timestamp_iso, _write_json_atomic
 
     ledger_path = layout.ledgers_root / "ledger.json"
     if not ledger_path.exists():
-        return refresh_report_indexes(layout, [])
-    payload = json.loads(ledger_path.read_text(encoding="utf-8"))
-    findings = payload.get("findings", []) if isinstance(payload, dict) else []
-    rows = [item for item in findings if isinstance(item, dict)]
-    for finding in rows:
+        return refresh_report_indexes(layout, [], packet_mode=packet_mode)
+    lock_kwargs = {"family": layout.family, "lane": layout.lane, "root_override": layout.base_root, "exclusive": True}
+    with _locked_payload(layout.program, **lock_kwargs) as payload:
+        rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
         if packet_mode == EVIDENCE_ONLY:
-            ensure_finding_evidence_packet(layout, finding)
+            needs_reservation = any(not finding.get("report_dir") for finding in rows)
+            for finding in rows:
+                reserve_finding_evidence_packet(layout, finding)
+            if needs_reservation:
+                # Persist reservations while retaining the same lock. No writer
+                # can insert an unreserved row before materialization begins.
+                payload["updated_at"] = _timestamp_iso()
+                _write_json_atomic(ledger_path, payload)
+            for finding in rows:
+                ensure_finding_evidence_packet(layout, finding)
         else:
-            report_path = write_finding_report(layout, finding)
-            finding["report_path"] = str(report_path)
-    if isinstance(payload, dict):
-        ledger_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    return refresh_report_indexes(layout, rows, packet_mode=packet_mode)
+            for finding in rows:
+                report_path = write_finding_report(layout, finding)
+                finding["report_path"] = str(report_path)
+        return refresh_report_indexes(layout, rows, packet_mode=packet_mode)

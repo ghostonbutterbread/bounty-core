@@ -437,6 +437,8 @@ def test_refresh_report_indexes_refreshes_generated_navigation_files(tmp_path):
 
 def test_refresh_report_indexes_refreshes_legacy_markerless_seeded_indexes(tmp_path):
     layout = resolve_storage("acme", family="web_bounty", lane="web", root_override=tmp_path, create=True)
+    (layout.reports_root / "index").mkdir()
+    (layout.reports_root / "raw" / "xss").mkdir(parents=True)
     status_index = layout.reports_root / "index" / "raw.md"
     type_index = layout.reports_root / "index" / "xss.md"
     nested_index = layout.reports_root / "raw" / "xss" / "index.md"
