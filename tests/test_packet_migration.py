@@ -1,6 +1,7 @@
 """Provider contract for new descriptive packets and read-only legacy coexistence."""
 from pathlib import Path
 import pytest
+import bounty_core.ledger as ledger_module
 
 from bounty_core import add_finding, patch_finding_by_fid, record_final_finding_report, resolve_storage
 from bounty_core.ledger import ledger_get, ledger_list, migrate_legacy_finding
@@ -47,6 +48,75 @@ def test_new_packet_rejects_preexisting_descriptive_directory(tmp_path):
         add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")
     assert evidence.read_text() == "# Unrelated prior evidence\n"
     assert ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path) is None
+
+
+def test_ledger_write_failure_does_not_strand_new_source_packet(tmp_path, monkeypatch):
+    original = ledger_module._write_json_atomic
+    attempts = 0
+
+    def fail_once(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic ledger write interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(ledger_module, "_write_json_atomic", fail_once)
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    with pytest.raises(OSError, match="synthetic ledger write interruption"):
+        add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")
+    assert not packet.exists()
+    assert ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path) is None
+    retried = add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert retried["report_dir"] == str(packet)
+    assert (packet / "EVIDENCE.md").is_file()
+
+
+def test_normalized_ledger_write_failure_does_not_strand_new_packet(tmp_path, monkeypatch):
+    original = ledger_module._write_json_atomic
+    attempts = 0
+
+    def fail_once(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic normalized ledger write interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(ledger_module, "_write_json_atomic", fail_once)
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    finding = {"program": "acme", "fid": "D01", "title": "Owned XSS", "type": "xss", "asset": "first.example"}
+    with pytest.raises(OSError, match="synthetic normalized ledger write interruption"):
+        add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")
+    assert not packet.exists()
+    assert ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path) is None
+    retried = add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert retried["report_dir"] == str(packet)
+    assert (packet / "EVIDENCE.md").is_file()
+
+
+def test_packet_phase_ledger_write_failure_is_retryable(tmp_path, monkeypatch):
+    original = ledger_module._write_json_atomic
+    attempts = 0
+
+    def fail_second(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise OSError("synthetic packet phase interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(ledger_module, "_write_json_atomic", fail_second)
+    packet = layout(tmp_path).reports_root / "D01-owned-xss"
+    finding = {"program": "acme", "fid": "D01", "title": "Owned XSS", "type": "xss", "asset": "first.example"}
+    with pytest.raises(OSError, match="synthetic packet phase interruption"):
+        add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")
+    stored = ledger_get("acme", "D01", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None
+    assert stored["report_dir"] == str(packet)
+    retried = add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")["finding"]
+    assert retried["report_dir"] == str(packet)
+    assert (packet / "EVIDENCE.md").is_file()
 
 
 def test_new_packet_freezes_descriptive_slug_and_uses_final_in_views(tmp_path):

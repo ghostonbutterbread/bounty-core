@@ -28,6 +28,7 @@ from .reports import (
     is_finding_packet_path,
     is_generated_safe_finding_report,
     refresh_report_indexes,
+    reserve_finding_evidence_packet,
     validate_packet_mode,
     write_finding_report,
 )
@@ -782,7 +783,7 @@ def ledger_add(
         if packet_mode == EVIDENCE_ONLY:
             layout = resolve_storage(program, family=family, lane=lane,
                                      root_override=_normalize_root_override(root_override, storage_root), create=True)
-            ensure_finding_evidence_packet(layout, entry)
+            reserve_finding_evidence_packet(layout, entry)
         findings.append(entry)
         return True, fid
 
@@ -1635,18 +1636,29 @@ def add_finding(
             existing["current"] = _current_from_sightings([item for item in existing.get("sightings", []) if isinstance(item, dict)])
             stored = existing
 
-        _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
-
         if packet_mode == EVIDENCE_ONLY:
-            ensure_finding_evidence_packet(layout, stored)
-        elif write_report:
-            report_path = write_finding_report(layout, stored)
-            stored["report_path"] = str(report_path)
-            _delete_report_if_under_reports_root(layout, stored, old_report_path, replacement=report_path)
+            reserve_finding_evidence_packet(layout, stored)
+        else:
+            _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
+            if write_report:
+                report_path = write_finding_report(layout, stored)
+                stored["report_path"] = str(report_path)
+                _delete_report_if_under_reports_root(layout, stored, old_report_path, replacement=report_path)
+            if refresh:
+                refresh_indexes(layout, findings)
+                refresh_report_indexes(layout, findings, packet_mode=packet_mode)
 
-        if refresh:
-            refresh_indexes(layout, findings)
-            refresh_report_indexes(layout, findings, packet_mode=packet_mode)
+    if packet_mode == EVIDENCE_ONLY:
+        # Commit the immutable packet reservation first. A failed ledger write
+        # leaves no orphan, and a failed packet write can reuse its ledger path.
+        with _locked_payload(layout.program, exclusive=True, lane=layout.lane, family=layout.family, root_override=root) as payload:
+            findings = payload["findings"]
+            stored = next(item for item in findings if item.get("identity") == normalized["identity"])
+            ensure_finding_evidence_packet(layout, stored)
+            if refresh:
+                refresh_indexes(layout, findings)
+                refresh_report_indexes(layout, findings, packet_mode=packet_mode)
+        _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
 
     return {"is_new": is_new, "finding": stored, "layout": layout.to_dict()}
 

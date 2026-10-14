@@ -652,8 +652,8 @@ def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Pa
     finding["report_dir"] = str(packet_dir)
     return packet_dir
 
-def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
-    """Create only the packet directories and EVIDENCE.md; never touch report files."""
+def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Select a fresh or historical packet path without writing packet files."""
     if not finding.get("report_dir"):
         fid = _finding_fid(finding)
         old = layout.reports_root / fid
@@ -665,6 +665,12 @@ def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any
             if candidate.exists() or candidate.is_symlink():
                 raise ValueError(f"finding packet already exists: {candidate}")
             finding["report_dir"] = str(candidate)
+    return canonical_finding_report_dir(layout, finding)
+
+
+def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
+    """Create only the packet directories and EVIDENCE.md; never touch report files."""
+    reserve_finding_evidence_packet(layout, finding)
     packet_dir = _ensure_finding_packet(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
     finding["evidence_path"] = str(evidence_path)
