@@ -1380,7 +1380,7 @@ def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]]
 def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     validate_packet_mode(packet_mode)
     # Import locally: ledger imports the report helpers at module initialization.
-    from .ledger import _locked_payload
+    from .ledger import _locked_payload, _timestamp_iso, _write_json_atomic
 
     ledger_path = layout.ledgers_root / "ledger.json"
     if not ledger_path.exists():
@@ -1389,17 +1389,18 @@ def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode:
     with _locked_payload(layout.program, **lock_kwargs) as payload:
         rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
         if packet_mode == EVIDENCE_ONLY:
-            # Persist all packet reservations before materializing any packet.
-            # A failed ledger commit therefore leaves no orphan to block retry.
+            needs_reservation = any(not finding.get("report_dir") for finding in rows)
             for finding in rows:
                 reserve_finding_evidence_packet(layout, finding)
+            if needs_reservation:
+                # Persist reservations while retaining the same lock. No writer
+                # can insert an unreserved row before materialization begins.
+                payload["updated_at"] = _timestamp_iso()
+                _write_json_atomic(ledger_path, payload)
+            for finding in rows:
+                ensure_finding_evidence_packet(layout, finding)
         else:
             for finding in rows:
                 report_path = write_finding_report(layout, finding)
                 finding["report_path"] = str(report_path)
-            return refresh_report_indexes(layout, rows, packet_mode=packet_mode)
-    with _locked_payload(layout.program, **lock_kwargs) as payload:
-        rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
-        for finding in rows:
-            ensure_finding_evidence_packet(layout, finding)
         return refresh_report_indexes(layout, rows, packet_mode=packet_mode)

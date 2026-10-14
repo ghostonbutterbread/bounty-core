@@ -1,4 +1,6 @@
 """Provider contract for new descriptive packets and read-only legacy coexistence."""
+from contextlib import contextmanager
+import json
 from pathlib import Path
 import pytest
 import bounty_core.ledger as ledger_module
@@ -169,6 +171,44 @@ def test_interrupted_evidence_publish_retries_without_empty_file(tmp_path, monke
     retried = add_finding(finding, root_override=tmp_path, packet_mode="evidence_only")["finding"]
     assert retried["report_dir"] == str(packet)
     assert (packet / "EVIDENCE.md").read_text(encoding="utf-8").startswith("# D01 — evidence")
+
+
+def test_bulk_refresh_never_materializes_row_inserted_between_lock_phases(tmp_path, monkeypatch):
+    add_finding(row(title="Owned XSS"), root_override=tmp_path, packet_mode="legacy", write_report=False, refresh=False)
+    d02_packet = layout(tmp_path).reports_root / "D02-new-arrival"
+    original_lock = ledger_module._locked_payload
+    original_write = ledger_module._write_json_atomic
+    injected = False
+
+    @contextmanager
+    def inject_after_first_unlock(*args, **kwargs):
+        nonlocal injected
+        with original_lock(*args, **kwargs) as payload:
+            yield payload
+        if not injected:
+            injected = True
+            add_finding(row(fid="D02", title="New arrival", type="New arrival", file="new.js", line=8),
+                        root_override=tmp_path, packet_mode="legacy", write_report=False, refresh=False)
+
+    def reject_uncommitted_packet(path, payload):
+        committed = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        existing = next((r for r in committed.get("findings", []) if r.get("fid") == "D02"), None)
+        incoming = next((r for r in payload.get("findings", []) if r.get("fid") == "D02"), None)
+        if existing and not existing.get("report_dir") and incoming and incoming.get("report_dir") and d02_packet.exists():
+            raise OSError("would strand a concurrent packet")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(ledger_module, "_locked_payload", inject_after_first_unlock)
+    monkeypatch.setattr(ledger_module, "_write_json_atomic", reject_uncommitted_packet)
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    assert injected
+    stored = ledger_get("acme", "D02", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None and not stored.get("report_dir")
+    assert not d02_packet.exists()
+    refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode="evidence_only")
+    stored = ledger_get("acme", "D02", family="web_bounty", lane="web", root_override=tmp_path)
+    assert stored is not None and stored["report_dir"] == str(d02_packet)
+    assert (d02_packet / "EVIDENCE.md").is_file()
 
 
 def test_new_packet_freezes_descriptive_slug_and_uses_final_in_views(tmp_path):
