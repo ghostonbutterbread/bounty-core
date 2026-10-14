@@ -24,7 +24,10 @@ The evidence-only report UX centers on stable finding packets and populated navi
 ```text
 reports/
   D01-owned-xss/
-    EVIDENCE.md
+    EVIDENCE.md              # investigator's claim, proof index, reproduction record
+    poc.py                   # optional standalone PoC, next to final report
+    example-com-xss-D01.md   # final report when reviewed and registered
+    evidence/                # optional attachments only when needed; never precreated
   categories/
   severity/
   submitted/                 # only while a submitted finding exists
@@ -62,7 +65,7 @@ Generated navigation uses Obsidian wikilinks for internal report links. Default 
 
 ## Evidence-only packets (opt-in)
 
-BBH can call `add_finding(finding, program=..., family=..., lane=..., root_override=..., packet_mode="evidence_only")`. The return value has `finding["fid"]`, the stored absolute `finding["report_dir"]`, and `finding["evidence_path"]`, but no new `report_path`. For title `Owned XSS` and FID `D01`, the packet is `reports/D01-owned-xss/`. This creates `EVIDENCE.md` once plus `poc/`, `evidence/`, `_meta/`; it never generates `REPORT.md` or `SUBMISSION.md`. Its investigator edits survive later operations.
+BBH can call `add_finding(finding, program=..., family=..., lane=..., root_override=..., packet_mode="evidence_only")`. The return value has `finding["fid"]`, the stored absolute `finding["report_dir"]`, and `finding["evidence_path"]`, but no new `report_path`. For title `Owned XSS` and FID `D01`, the packet is `reports/D01-owned-xss/`. This creates `EVIDENCE.md` once and `_meta/`; it does not precreate empty `poc/` or `evidence/` folders. `EVIDENCE.md` is the investigator's claim and evidence index, not a duplicate of any attached files; add sanitized attachments under `evidence/` only when needed, and put a standalone `poc.<ext>` beside `EVIDENCE.md` and the final report. It never generates `REPORT.md` or `SUBMISSION.md`. Its investigator edits survive later operations.
 
 For FID-based edits or submission state, call `patch_finding_by_fid(program, fid, patch, family=..., lane=..., root_override=..., packet_mode="evidence_only", refresh=True, update_current=True)`; use `update_current` only when changing current status/tier. Identity-based edits use `update_finding(identity, patch, program, family, lane, root_override=..., packet_mode="evidence_only")`. `write_report=True` on the FID patch does **not** generate a report in this mode. Existing legacy `report_path`, `REPORT.md`, and `SUBMISSION.md` are left alone.
 

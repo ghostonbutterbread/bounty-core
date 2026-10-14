@@ -71,8 +71,8 @@ def test_update_finding_preserves_observation_metadata_and_refreshes(tmp_path):
     assert Path(finding["report_path"]) == layout.reports_root / finding["fid"] / "REPORT.md"
     assert Path(finding["report_dir"]) == layout.reports_root / finding["fid"]
     assert Path(finding["report_path"]).exists()
-    assert (Path(finding["report_dir"]) / "poc").is_dir()
-    assert (Path(finding["report_dir"]) / "evidence").is_dir()
+    assert not (Path(finding["report_dir"]) / "poc").exists()
+    assert not (Path(finding["report_dir"]) / "evidence").exists()
     assert "Reflected XSS on search" in (layout.reports_root / "index" / "confirmed.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" not in (layout.reports_root / "index" / "raw.md").read_text(encoding="utf-8")
     assert "Reflected XSS on search" in (layout.reports_root / "confirmed" / "xss" / "index.md").read_text(encoding="utf-8")

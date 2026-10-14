@@ -63,8 +63,8 @@ def test_write_finding_report_uses_stable_fid_path(tmp_path):
     assert changed_path == expected
     assert canonical_finding_report_path(layout, changed) == changed_path
     assert canonical_finding_report_dir(layout, changed) == expected.parent
-    assert (expected.parent / "poc").is_dir()
-    assert (expected.parent / "evidence").is_dir()
+    assert not (expected.parent / "poc").exists()
+    assert not (expected.parent / "evidence").exists()
     assert (expected.parent / "_meta").is_dir()
 
 
@@ -78,8 +78,8 @@ def test_write_finding_report_creates_incomplete_evidence_scaffold(tmp_path):
     text = evidence_path.read_text(encoding="utf-8")
     assert report_path.name == "REPORT.md"
     assert "D42" in text
-    assert "evidence/" in text
-    assert "poc/" in text
+    assert "optional `evidence/`" in text
+    assert "`poc.<ext>` alongside this file" in text
     assert "candidate request in run notes" not in text
     assert "Ledger has 1 unreviewed evidence item" in text
     assert "## Claim and status" in text
