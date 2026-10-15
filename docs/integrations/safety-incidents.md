@@ -20,8 +20,8 @@ Agent stops unsafe work, records a sanitized lane-scoped event, then optionally 
 
 ## Evidence and review
 
-- Tests and commands: `python -m pytest -q` — 192 passed; `git diff --check` clean; `python -m bounty_core.safety_cli ... --no-notify` — persisted incident with no alert (offline smoke).
-- Independent review: pending.
+- Tests and commands: initial 192 passed; post-review `python -m pytest -q tests/test_safety_incidents.py` — 14 passed; `python -m pytest -q` — 200 passed; `git diff --check` clean; offline CLI smoke persisted an incident without alert.
+- Independent review: `a0e397e` review found partial-tail recovery, pre-send receipt, webhook-path redaction, existing-file mode, and CLI boundary gaps; patched on feature branch, re-review pending.
 - Replay/cohort/fixture evidence: mocked webhook only; no live posting to exposed credential.
 - Merge/ancestry evidence: pending.
 

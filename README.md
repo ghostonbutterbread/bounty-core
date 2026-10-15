@@ -76,7 +76,11 @@ repository, command line, Shared artifact, or agent prompt. Discord webhook URLs
 are bearer credentials: someone with the URL can post to its channel. Use a
 private incident channel and restrict webhook access. HTTP 200/204 records `sent`;
 HTTP failures and timeouts retain the incident and a failure/unknown receipt.
-A timeout can mean delivery happened; retrying may duplicate a message. After
+A `pending` receipt is fsynced before each delivery attempt; if it is the last
+receipt, delivery is unknown and the operator should check the channel before
+retrying. If receipt storage fails, the CLI still returns the persisted incident
+ID with `receipt-write-failed` and exits nonzero. A timeout can mean delivery
+happened; retrying may duplicate a message. After
 checking the channel, manually retry an undelivered ID with:
 
 ```bash

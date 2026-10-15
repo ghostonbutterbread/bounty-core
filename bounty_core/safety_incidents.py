@@ -24,7 +24,9 @@ WEBHOOK_ENV = "DISCORD_SAFETY_WEBHOOK_URL"
 CATEGORIES = {"non-owned-mutation", "production-risk", "scope-violation", "sensitive-exposure", "other"}
 OUTCOMES = {"occurred", "attempted", "uncertain"}
 # The ordinary evidence redactor does not recognize opaque Discord webhook paths.
-_WEBHOOK_RE = re.compile(r"https?://(?:discord(?:app)?\.com)/api/webhooks/[^\s\"'<>]+", re.I)
+_WEBHOOK_RE = re.compile(
+    r"(?:https?://)?(?:canary\.|ptb\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/[^\s\"'<>]+", re.I
+)
 _WEBHOOK_ENDPOINT_RE = re.compile(r"https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+\Z")
 
 
@@ -49,10 +51,18 @@ def _append(path: Path, row: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Restrict new files even if the process umask is permissive. Shared storage
     # still requires sanitized fields; this is not a private secret store.
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as handle:
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
+            os.fchmod(handle.fileno(), 0o600)
+            # An interrupted previous write may leave a partial JSONL line.
+            # Preserve it as evidence, but separate the next complete record.
+            size = os.fstat(handle.fileno()).st_size
+            if size and os.pread(handle.fileno(), 1, size - 1) != b"\n":
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -107,13 +117,18 @@ class SafetyIncidentStore:
         }
         stored = redact_event_value(_safe(event))
         _append(self.events_path, stored)
-        receipt = self.notify(stored["incident_id"]) if notify else None
+        try:
+            receipt = self.notify(stored["incident_id"]) if notify else None
+        except OSError:
+            # The incident is already durable. Keep its ID visible to the caller
+            # even if a receipt write fails before or after a network request.
+            receipt = {"incident_id": stored["incident_id"], "state": "receipt-write-failed"}
         return {"incident": stored, "notification": receipt}
 
     def get(self, incident_id: str) -> dict[str, Any] | None:
         if not self.events_path.exists():
             return None
-        for line in self.events_path.read_text(encoding="utf-8").splitlines():
+        for line in self.events_path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
@@ -131,6 +146,10 @@ class SafetyIncidentStore:
         incident = self.get(incident_id)
         if incident is None:
             raise ValueError("incident not found in this program/lane")
+        # An attempt receipt is fsynced before the network request. If a final
+        # disposition cannot be written, operators can still see an unknown
+        # delivery and must check the channel before retrying.
+        _append(self.notifications_path, {"incident_id": incident_id, "timestamp": utc_timestamp(), "state": "pending"})
         url = os.environ.get(WEBHOOK_ENV, "")
         if not url:
             state = "not-configured"
@@ -171,8 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     notification = commands.add_parser("notify", help="manually retry one incident ID; may duplicate a timed-out delivery")
     notification.add_argument("incident_id")
     args = parser.parse_args(argv)
-    store = SafetyIncidentStore(args.program, family=args.family, lane=args.lane, root_override=args.root)
     try:
+        store = SafetyIncidentStore(args.program, family=args.family, lane=args.lane, root_override=args.root)
         if args.command == "record":
             result = store.record(
                 producer=args.producer, run_id=args.run_id, category=args.category,

@@ -39,7 +39,7 @@ def test_persists_redacted_incident_before_notification_and_keeps_failure_receip
     assert result["incident"]["subject"] == "https://site.test/path?token=REDACTED [REDACTED WEBHOOK]"
     assert webhook not in store.events_path.read_text()
     assert webhook not in store.notifications_path.read_text()
-    assert json.loads(store.notifications_path.read_text())["incident_id"] == result["incident"]["incident_id"]
+    assert json.loads(store.notifications_path.read_text().splitlines()[-1])["incident_id"] == result["incident"]["incident_id"]
     assert store.events_path.stat().st_mode & 0o777 == 0o600
 
 
@@ -68,7 +68,7 @@ def test_unconfigured_and_invalid_webhooks_never_send_and_can_retry(tmp_path, mo
     assert result["notification"]["state"] == "not-configured"
     monkeypatch.setenv(incidents.WEBHOOK_ENV, "http://example.test/api/webhooks/123/token")
     assert store.notify(incident_id)["state"] == "invalid-configuration"
-    assert len(store.notifications_path.read_text().splitlines()) == 2
+    assert len(store.notifications_path.read_text().splitlines()) == 4
     assert store.get("absent") is None
     with pytest.raises(ValueError):
         store.notify("absent")
@@ -104,3 +104,75 @@ def test_cli_reports_missing_notification_as_nonzero_after_persistence(tmp_path,
     assert code == 1
     assert result["notification"]["state"] == "not-configured"
     assert SafetyIncidentStore("sample", root_override=tmp_path).get(result["incident"]["incident_id"])
+
+
+def test_interrupted_tail_is_separated_before_next_incident(tmp_path):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    first = sample(store, notify=False)["incident"]["incident_id"]
+    with store.events_path.open("ab") as handle:
+        handle.write(b'{"partial":\xe2')  # interrupted in the middle of UTF-8
+    second = sample(store, notify=False)["incident"]["incident_id"]
+    assert store.get(first) is not None
+    assert store.get(second) is not None
+    assert len(store.events_path.read_text(errors="replace").splitlines()) == 3
+
+
+def test_receipt_append_failure_keeps_id_visible_and_does_not_send(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    real_append = incidents._append
+    def fail_receipt(path, row):
+        if path == store.notifications_path:
+            raise OSError("receipt unavailable")
+        real_append(path, row)
+    monkeypatch.setattr(incidents, "_append", fail_receipt)
+    monkeypatch.setattr(incidents, "build_opener", Mock(side_effect=AssertionError("must not send")))
+    result = sample(store)
+    assert result["notification"]["state"] == "receipt-write-failed"
+    assert store.get(result["incident"]["incident_id"])
+
+
+def test_post_delivery_receipt_failure_has_pending_receipt_and_id(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setenv(incidents.WEBHOOK_ENV, "https://discord.com/api/webhooks/123456/token")
+    sent = []
+    def deliver(req, timeout):
+        sent.append(req)
+        return Mock(__enter__=lambda self: Mock(status=204), __exit__=lambda *args: None)
+    monkeypatch.setattr(incidents, "build_opener", lambda *args: Mock(open=deliver))
+    real_append = incidents._append
+    def fail_final(path, row):
+        if path == store.notifications_path and row["state"] != "pending":
+            raise OSError("receipt unavailable")
+        real_append(path, row)
+    monkeypatch.setattr(incidents, "_append", fail_final)
+    result = sample(store)
+    assert len(sent) == 1
+    assert result["notification"]["state"] == "receipt-write-failed"
+    assert json.loads(store.notifications_path.read_text())["state"] == "pending"
+    assert store.get(result["incident"]["incident_id"])
+
+
+@pytest.mark.parametrize("webhook", [
+    "discord.com/api/webhooks/123456/fake-secret",
+    "https://discord.com/api/v10/webhooks/123456/fake-secret",
+    "https://canary.discord.com/api/webhooks/123456/fake-secret",
+])
+def test_webhook_path_variants_never_persist(tmp_path, webhook):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    sample(store, subject="Saw " + webhook, notify=False)
+    assert "fake-secret" not in store.events_path.read_text()
+
+
+def test_existing_permissive_event_file_is_tightened(tmp_path):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    store.root.mkdir(parents=True)
+    store.events_path.write_text("")
+    store.events_path.chmod(0o644)
+    sample(store, notify=False)
+    assert store.events_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_invalid_cli_family_has_safe_error(tmp_path, capsys):
+    code = incidents.main(["--program", "sample", "--lane", "web", "--family", "bad", "--root", str(tmp_path), "notify", "SI-unknown"])
+    assert code == 2
+    assert "traceback" not in capsys.readouterr().err.lower()
