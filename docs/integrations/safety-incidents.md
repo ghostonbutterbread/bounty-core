@@ -6,8 +6,8 @@
 - **Base commit:** `035c9a1` (`origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-10-15
-- **Latest immutable recovery checkpoint:** none yet
-- **Feature implementation commit(s):** none yet
+- **Latest immutable recovery checkpoint:** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
+- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
 - **Inspiration / canonical references:** Ryushe's safety-incident request; Bounty Core `ErrorStore`, `BlockerStore`, and storage resolver.
 
 ## Intent
@@ -36,10 +36,10 @@ Agent stops unsafe work, records a sanitized lane-scoped event, then optionally 
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/safety-incident-store`
-- **Latest immutable recovery checkpoint:** none yet
-- **Feature implementation commit(s):** none yet
-- **Exact resume point:** fix review findings, run tests and CLI, commit, then integration decision.
-- **Working-tree state at handoff:** intentionally uncommitted during development.
+- **Latest immutable recovery checkpoint:** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
+- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
+- **Exact resume point:** address independent review findings, rerun tests, then integration decision.
+- **Working-tree state at handoff:** committed implementation; dossier-only receipt edit pending commit.
 
 ## Decision gates
 
