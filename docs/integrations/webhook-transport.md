@@ -6,8 +6,8 @@
 - **Base commit:** `21005a1` (`origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-10-15
-- **Latest immutable recovery checkpoint:** `c6df7ff965378f38c568cb64a224f6bff28d8f08`
-- **Feature implementation commit(s):** `c6df7ff965378f38c568cb64a224f6bff28d8f08`
+- **Latest immutable recovery checkpoint:** `bd7af07523fac5ae91f0e0c757b2ef8162d2136e`
+- **Feature implementation commit(s):** `c6df7ff965378f38c568cb64a224f6bff28d8f08`, `bd7af07523fac5ae91f0e0c757b2ef8162d2136e`
 - **Inspiration / canonical references:** Real approved Discord webhook test: urllib default identity returned Cloudflare 1010/403, while a browser-compatible User-Agent allowed GET and POST.
 
 ## Intent
@@ -33,8 +33,8 @@ Make the Bounty Core safety notifier work with the approved Discord webhook from
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `fix/safety-webhook-user-agent`
-- **Latest immutable recovery checkpoint:** `c6df7ff965378f38c568cb64a224f6bff28d8f08`
-- **Feature implementation commit(s):** `c6df7ff965378f38c568cb64a224f6bff28d8f08`
+- **Latest immutable recovery checkpoint:** `bd7af07523fac5ae91f0e0c757b2ef8162d2136e`
+- **Feature implementation commit(s):** `c6df7ff965378f38c568cb64a224f6bff28d8f08`, `bd7af07523fac5ae91f0e0c757b2ef8162d2136e`
 - **Exact resume point:** independent release review, beta integration/test/push/read-back, retire dossier and feature worktree.
 - **Working-tree state at handoff:** clean after this dossier checkpoint commit.
 
