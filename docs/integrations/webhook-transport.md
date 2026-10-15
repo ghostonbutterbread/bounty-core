@@ -1,6 +1,6 @@
 # Discord safety webhook transport repair integration dossier
 
-- **Status:** review-ready
+- **Status:** approved for beta integration (independent release gate)
 - **Owner:** Hermes
 - **Branch / owning ref:** `fix/safety-webhook-user-agent`
 - **Base commit:** `21005a1` (`origin/beta`)
@@ -22,7 +22,7 @@ Make the Bounty Core safety notifier work with the approved Discord webhook from
 
 - Red test: User-Agent regression failed before fix because request carried none.
 - Tests: initial 15 focused / 201 full passed; post-review fix `python -m pytest -q tests/test_safety_incidents.py` 16 passed, `python -m pytest -q` 202 passed, `git diff --check` clean.
-- Independent review: first fresh release gate reproduced `http.client.IncompleteRead` after HTTP 200 leaving only `pending`; fixed by treating unparseable/truncated response metadata as accepted with no message ID, preserving the final receipt. Second release gate pending.
+- Independent review: first fresh release gate reproduced `http.client.IncompleteRead` after HTTP 200 leaving only `pending`; fixed by treating unparseable/truncated response metadata as accepted with no message ID, preserving the final receipt. Second independent gate reviewed the full delta against fetched `origin/beta` (`21005a103252c4a7a9e13ecb4eff3702016d7ddd`), reran the IncompleteRead regression (final `sent` without `message_id`), and found no concrete serious new issue. Fresh `python -m pytest -q tests/test_safety_incidents.py`: 16 passed; `python -m pytest -q`: 202 passed; `git diff --check` clean. No further live webhook delivery.
 - Live, owner-approved, synthetic-only delivery: direct webhook POST with `wait=true` returned message `1560427336875245640`, exact GET read-back matched. Library from feature worktree recorded synthetic incident `SI-7d71822a577f4a099510e8e19f16688e`, receipt `sent` with message `1560428166743330837`, exact GET read-back matched. No raw webhook URL stored in repository, script, or output.
 - Merge/ancestry evidence: pending.
 
@@ -47,3 +47,4 @@ Make the Bounty Core safety notifier work with the approved Discord webhook from
 ## Decision record
 
 - 2026-10-15 — bounded compatibility repair and synthetic live delivery verified; no production incident was fabricated.
+- 2026-10-15 — independent release review approves integration into `beta` at fetched base `21005a103252c4a7a9e13ecb4eff3702016d7ddd`, after 16 focused and 202 full tests passed. No further live send. Deferred: runtime agent installations and injected process secret, to verify per agent before claiming activation; stable promotion remains an owner decision.
