@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from email.message import Message
+from http.client import IncompleteRead
 from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
 
@@ -75,6 +76,18 @@ def test_waited_delivery_records_discord_message_id(tmp_path, monkeypatch):
     assert result["notification"]["state"] == "sent"
     assert result["notification"]["message_id"] == "123456789"
     assert json.loads(store.notifications_path.read_text().splitlines()[-1])["message_id"] == "123456789"
+
+
+def test_accepted_delivery_with_truncated_body_keeps_final_receipt(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setenv(incidents.WEBHOOK_ENV, "https://discord.com/api/webhooks/123456/token")
+    response = Mock(status=200, read=Mock(side_effect=IncompleteRead(b'{"id":', 4)))
+    monkeypatch.setattr(incidents, "build_opener", lambda *args: Mock(open=lambda req, timeout: Mock(__enter__=lambda self: response, __exit__=lambda *args: None)))
+    result = sample(store)
+    assert result["notification"]["state"] == "sent"
+    assert "message_id" not in result["notification"]
+    assert json.loads(store.notifications_path.read_text().splitlines()[-1])["state"] == "sent"
+    assert store.get(result["incident"]["incident_id"])
 
 
 def test_unconfigured_and_invalid_webhooks_never_send_and_can_retry(tmp_path, monkeypatch):

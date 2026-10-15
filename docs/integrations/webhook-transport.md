@@ -21,9 +21,9 @@ Make the Bounty Core safety notifier work with the approved Discord webhook from
 ## Evidence and review
 
 - Red test: User-Agent regression failed before fix because request carried none.
-- Tests: `python -m pytest -q tests/test_safety_incidents.py` 15 passed; `python -m pytest -q` 201 passed; `git diff --check` clean.
+- Tests: initial 15 focused / 201 full passed; post-review fix `python -m pytest -q tests/test_safety_incidents.py` 16 passed, `python -m pytest -q` 202 passed, `git diff --check` clean.
+- Independent review: first fresh release gate reproduced `http.client.IncompleteRead` after HTTP 200 leaving only `pending`; fixed by treating unparseable/truncated response metadata as accepted with no message ID, preserving the final receipt. Second release gate pending.
 - Live, owner-approved, synthetic-only delivery: direct webhook POST with `wait=true` returned message `1560427336875245640`, exact GET read-back matched. Library from feature worktree recorded synthetic incident `SI-7d71822a577f4a099510e8e19f16688e`, receipt `sent` with message `1560428166743330837`, exact GET read-back matched. No raw webhook URL stored in repository, script, or output.
-- Independent review: pending fresh release gate.
 - Merge/ancestry evidence: pending.
 
 ## Blockers and deferred work

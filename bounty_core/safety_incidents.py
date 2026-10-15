@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+from http.client import IncompleteRead
 import json
 import os
 import re
@@ -172,7 +173,7 @@ class SafetyIncidentStore:
                     if response.status == 200:
                         try:
                             body = json.load(response)
-                        except (ValueError, OSError):
+                        except (ValueError, OSError, UnicodeError, IncompleteRead):
                             body = {}
                         candidate = str(body.get("id", "")) if isinstance(body, dict) else ""
                         message_id = candidate if candidate.isdigit() else None
