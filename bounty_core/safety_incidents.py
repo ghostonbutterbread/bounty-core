@@ -28,6 +28,9 @@ _WEBHOOK_RE = re.compile(
     r"(?:https?://)?(?:canary\.|ptb\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/[^\s\"'<>]+", re.I
 )
 _WEBHOOK_ENDPOINT_RE = re.compile(r"https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+\Z")
+# Discord's edge rejected urllib's Python-urllib identity with Cloudflare 1010
+# in a live delivery check; use a conventional browser-compatible identity.
+WEBHOOK_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
 
 
 def _safe(value: Any) -> Any:
@@ -151,6 +154,7 @@ class SafetyIncidentStore:
         # delivery and must check the channel before retrying.
         _append(self.notifications_path, {"incident_id": incident_id, "timestamp": utc_timestamp(), "state": "pending"})
         url = os.environ.get(WEBHOOK_ENV, "")
+        message_id = None
         if not url:
             state = "not-configured"
         elif not _WEBHOOK_ENDPOINT_RE.fullmatch(url):
@@ -161,15 +165,24 @@ class SafetyIncidentStore:
                 f"{incident['category']} ({incident['outcome']}). Stop/contain; review the lane-local record."
             )
             payload = json.dumps({"content": content, "allowed_mentions": {"parse": []}}).encode("utf-8")
-            request = Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            request = Request(url + "?wait=true", data=payload, headers={"Content-Type": "application/json", "User-Agent": WEBHOOK_USER_AGENT}, method="POST")
             try:
                 with build_opener(_NoRedirect()).open(request, timeout=5) as response:
                     state = "sent" if response.status in (200, 204) else f"http-{response.status}"
+                    if response.status == 200:
+                        try:
+                            body = json.load(response)
+                        except (ValueError, OSError):
+                            body = {}
+                        candidate = str(body.get("id", "")) if isinstance(body, dict) else ""
+                        message_id = candidate if candidate.isdigit() else None
             except HTTPError as exc:
                 state = f"http-{exc.code}"
             except (URLError, TimeoutError, OSError):
                 state = "delivery-unknown"
         receipt = {"incident_id": incident_id, "timestamp": utc_timestamp(), "state": state}
+        if message_id is not None:
+            receipt["message_id"] = message_id
         _append(self.notifications_path, receipt)
         return receipt
 

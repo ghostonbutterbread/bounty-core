@@ -47,17 +47,34 @@ def test_sends_fixed_context_only_without_mentions_or_raw_subject(tmp_path, monk
     store = SafetyIncidentStore("sample", root_override=tmp_path)
     monkeypatch.setenv(incidents.WEBHOOK_ENV, "https://discord.com/api/webhooks/123456/abc-SECRET_7")
     sent = []
+    sent_user_agents = []
+    sent_urls = []
     def deliver(req, timeout):
         sent.append(json.loads(req.data))
+        sent_user_agents.append(req.get_header("User-agent"))
+        sent_urls.append(req.full_url)
         return Mock(__enter__=lambda self: Mock(status=204), __exit__=lambda *args: None)
     monkeypatch.setattr(incidents, "build_opener", lambda *args: Mock(open=deliver))
     result = sample(store, subject="@everyone private person's record", impact="password is SECRET")
     assert result["notification"]["state"] == "sent"
+    assert sent_user_agents and sent_user_agents[0].startswith("Mozilla/5.0")
+    assert sent_urls[0].endswith("?wait=true")
     assert sent[0]["allowed_mentions"] == {"parse": []}
     assert "@everyone" not in sent[0]["content"]
     assert "password" not in sent[0]["content"]
     assert result["incident"]["incident_id"] in sent[0]["content"]
     assert len(store.events_path.read_text().splitlines()) == 1
+
+
+def test_waited_delivery_records_discord_message_id(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setenv(incidents.WEBHOOK_ENV, "https://discord.com/api/webhooks/123456/token")
+    response = Mock(status=200, read=Mock(return_value=b'{"id":"123456789"}'))
+    monkeypatch.setattr(incidents, "build_opener", lambda *args: Mock(open=lambda req, timeout: Mock(__enter__=lambda self: response, __exit__=lambda *args: None)))
+    result = sample(store)
+    assert result["notification"]["state"] == "sent"
+    assert result["notification"]["message_id"] == "123456789"
+    assert json.loads(store.notifications_path.read_text().splitlines()[-1])["message_id"] == "123456789"
 
 
 def test_unconfigured_and_invalid_webhooks_never_send_and_can_retry(tmp_path, monkeypatch):
