@@ -1,13 +1,13 @@
 # Safety incident store integration dossier
 
-- **Status:** feature
+- **Status:** review-ready
 - **Owner:** Hermes
 - **Branch / owning ref:** `feat/safety-incident-store`
 - **Base commit:** `035c9a1` (`origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-10-15
-- **Latest immutable recovery checkpoint:** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
-- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
+- **Latest immutable recovery checkpoint:** `c2fe67ffacb19ec7e01f0f79fa2bb9583b2e9017`
+- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`, `c2fe67ffacb19ec7e01f0f79fa2bb9583b2e9017`
 - **Inspiration / canonical references:** Ryushe's safety-incident request; Bounty Core `ErrorStore`, `BlockerStore`, and storage resolver.
 
 ## Intent
@@ -21,7 +21,7 @@ Agent stops unsafe work, records a sanitized lane-scoped event, then optionally 
 ## Evidence and review
 
 - Tests and commands: initial 192 passed; post-review `python -m pytest -q tests/test_safety_incidents.py` — 14 passed; `python -m pytest -q` — 200 passed; `git diff --check` clean; offline CLI smoke persisted an incident without alert.
-- Independent review: `a0e397e` review found partial-tail recovery, pre-send receipt, webhook-path redaction, existing-file mode, and CLI boundary gaps; patched on feature branch, re-review pending.
+- Independent review: `a0e397e` review found five concrete gaps; `c2fe67f` repaired them. Independent re-review found no serious defect, reran 14 focused / 200 full tests, and confirmed clean diff.
 - Replay/cohort/fixture evidence: mocked webhook only; no live posting to exposed credential.
 - Merge/ancestry evidence: pending.
 
@@ -36,10 +36,10 @@ Agent stops unsafe work, records a sanitized lane-scoped event, then optionally 
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/safety-incident-store`
-- **Latest immutable recovery checkpoint:** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
-- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`
-- **Exact resume point:** address independent review findings, rerun tests, then integration decision.
-- **Working-tree state at handoff:** committed implementation; dossier-only receipt edit pending commit.
+- **Latest immutable recovery checkpoint:** `c2fe67ffacb19ec7e01f0f79fa2bb9583b2e9017`
+- **Feature implementation commit(s):** `a0e397e2bd0a93aaaf2066173d45a8894ec09d83`, `c2fe67ffacb19ec7e01f0f79fa2bb9583b2e9017`
+- **Exact resume point:** merge reviewed feature into current `beta`, remove temporary dossier on target, rerun tests, then verify remote read-back. Agent routing and live alert activation remain separate.
+- **Working-tree state at handoff:** clean after this decision commit.
 
 ## Decision gates
 
@@ -50,3 +50,4 @@ Agent stops unsafe work, records a sanitized lane-scoped event, then optionally 
 ## Decision record
 
 - 2026-10-15 — created feature branch from fetched beta; live webhook intentionally unused.
+- 2026-10-15 — independent review and re-review complete; accept for beta library/CLI integration only. Live webhook delivery and agent routing are explicitly deferred pending rotated secret and runtime integration.
