@@ -82,8 +82,10 @@ in a repository, command line, Shared artifact, or agent prompt. A URL already
 shared in chat may be used when the owner explicitly accepts that exposure;
 rotation is recommended, not a prerequisite. Discord webhook URLs
 are bearer credentials: someone with the URL can post to its channel. Use a
-private incident channel and restrict webhook access. HTTP 200/204 records `sent`;
-HTTP failures and timeouts retain the incident and a failure/unknown receipt.
+private incident channel and restrict webhook access. Discord's `wait=true`
+response records `sent` and, when provided, a `message_id` in the notification
+receipt for exact message read-back. HTTP failures and timeouts retain the
+incident and a failure/unknown receipt.
 A `pending` receipt is fsynced before each delivery attempt; if it is the last
 receipt, delivery is unknown and the operator should check the channel before
 retrying. If receipt storage fails, the CLI still returns the persisted incident
