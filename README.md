@@ -41,6 +41,57 @@ reports/
 
 No empty legacy matrix or daily roots are seeded by storage initialization. Historical hand-authored and populated legacy files are not removed by evidence-only refresh.
 
+## Agent safety incidents (opt-in beta API)
+
+`SafetyIncidentStore` is **separate** from findings, errors, and blockers. An agent that
+realizes it has changed non-owned data, taken an unsafe production action, crossed
+scope, or exposed sensitive material should stop the action, report the observed
+facts promptly, and seek operator direction for containment. Suspected attempts
+can be recorded as `uncertain`; do not wait to prove damage or attempt an
+unapproved reversal. This is self-reporting, **not automatic interception** of
+requests or a guarantee that every unsafe action is detected.
+
+The lane-local append-only record is
+`~/Shared/{family}/{program}/{lane}/safety_incidents/events.jsonl`. Notification
+attempts and their status are in `notifications.jsonl`; they are not finding
+severity or proof packets. Keep raw requests/responses, customer data, secrets,
+and webhook URLs out of descriptions; common credentials and Discord webhook
+paths are also redacted defensively. Give concise sanitized context in `action`,
+`subject`, `impact`, and `containment`. A notification carries only incident ID,
+program/lane, category, and outcome, not the free-text evidence.
+
+```bash
+python -m bounty_core.safety_cli --program PROGRAM --lane web record \
+  --producer AGENT --run-id RUN --category non-owned-mutation \
+  --outcome uncertain --action 'POST changed an object' \
+  --subject 'object ownership uncertain' --impact 'possible non-owned mutation' \
+  --containment 'stopped further writes; awaiting operator'
+```
+
+The record is fsynced **before** any network delivery. With no configuration, the
+command records a `not-configured` notification receipt and exits 1; it does not
+silently claim an alert was delivered. Configure a **new, rotated** Discord webhook
+as `DISCORD_SAFETY_WEBHOOK_URL` in the process secret environment, never in a
+repository, command line, Shared artifact, or agent prompt. Discord webhook URLs
+are bearer credentials: someone with the URL can post to its channel. Use a
+private incident channel and restrict webhook access. HTTP 200/204 records `sent`;
+HTTP failures and timeouts retain the incident and a failure/unknown receipt.
+A `pending` receipt is fsynced before each delivery attempt; if it is the last
+receipt, delivery is unknown and the operator should check the channel before
+retrying. If receipt storage fails, the CLI still returns the persisted incident
+ID with `receipt-write-failed` and exits nonzero. A timeout can mean delivery
+happened; retrying may duplicate a message. After
+checking the channel, manually retry an undelivered ID with:
+
+```bash
+python -m bounty_core.safety_cli --program PROGRAM --lane web notify SI-INCIDENT_ID
+```
+
+`SafetyIncidentStore(..., root_override=...)` supports explicit local tests.
+No webhook is sent unless the environment variable is configured. Rollout to
+agents requires a separate routing/integration step; importing the library does
+not turn on automatic monitoring.
+
 Generated navigation files are marked with:
 
 ```text
