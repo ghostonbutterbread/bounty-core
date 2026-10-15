@@ -44,12 +44,18 @@ No empty legacy matrix or daily roots are seeded by storage initialization. Hist
 ## Agent safety incidents (opt-in beta API)
 
 `SafetyIncidentStore` is **separate** from findings, errors, and blockers. An agent that
-realizes it has changed non-owned data, taken an unsafe production action, crossed
-scope, or exposed sensitive material should stop the action, report the observed
-facts promptly, and seek operator direction for containment. Suspected attempts
-can be recorded as `uncertain`; do not wait to prove damage or attempt an
-unapproved reversal. This is self-reporting, **not automatic interception** of
-requests or a guarantee that every unsafe action is detected.
+realizes its action may have changed non-owned data, made an **unplanned change
+to live production infrastructure** (for example a write to a production AWS
+bucket, IAM change, deployment, or service shutdown), crossed scope, or caused
+unauthorized sensitive exposure should stop, report observed facts promptly,
+and seek operator direction for containment. Production impact counts even if
+we own the infrastructure. Expected actions on explicitly owned test fixtures,
+including deletion of a disposable owned account during an authorized IDOR
+test, are normal testing, not incidents. Classify actual authorization, target,
+and consequence—not the HTTP verb or the fact that an account was deleted.
+Suspected effects can be recorded as `uncertain`; do not wait to prove damage
+or attempt an unapproved reversal. This is self-reporting, **not automatic
+interception** of requests or a guarantee that every unsafe action is detected.
 
 The lane-local append-only record is
 `~/Shared/{family}/{program}/{lane}/safety_incidents/events.jsonl`. Notification
@@ -70,9 +76,11 @@ python -m bounty_core.safety_cli --program PROGRAM --lane web record \
 
 The record is fsynced **before** any network delivery. With no configuration, the
 command records a `not-configured` notification receipt and exits 1; it does not
-silently claim an alert was delivered. Configure a **new, rotated** Discord webhook
-as `DISCORD_SAFETY_WEBHOOK_URL` in the process secret environment, never in a
-repository, command line, Shared artifact, or agent prompt. Discord webhook URLs
+silently claim an alert was delivered. Configure an **operator-approved** Discord
+webhook as `DISCORD_SAFETY_WEBHOOK_URL` in the process secret environment, never
+in a repository, command line, Shared artifact, or agent prompt. A URL already
+shared in chat may be used when the owner explicitly accepts that exposure;
+rotation is recommended, not a prerequisite. Discord webhook URLs
 are bearer credentials: someone with the URL can post to its channel. Use a
 private incident channel and restrict webhook access. HTTP 200/204 records `sent`;
 HTTP failures and timeouts retain the incident and a failure/unknown receipt.
