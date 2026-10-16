@@ -40,7 +40,9 @@ def test_persists_redacted_incident_before_notification_and_keeps_failure_receip
     assert result["incident"]["subject"] == "https://site.test/path?token=REDACTED [REDACTED WEBHOOK]"
     assert webhook not in store.events_path.read_text()
     assert webhook not in store.notifications_path.read_text()
-    assert json.loads(store.notifications_path.read_text().splitlines()[-1])["incident_id"] == result["incident"]["incident_id"]
+    pending, failure = map(json.loads, store.notifications_path.read_text().splitlines())
+    assert pending["attempt_id"] == failure["attempt_id"] == result["notification"]["attempt_id"]
+    assert failure["incident_id"] == result["incident"]["incident_id"]
     assert store.events_path.stat().st_mode & 0o777 == 0o600
 
 
@@ -65,6 +67,9 @@ def test_sends_fixed_context_only_without_mentions_or_raw_subject(tmp_path, monk
     assert "password" not in sent[0]["content"]
     assert result["incident"]["incident_id"] in sent[0]["content"]
     assert len(store.events_path.read_text().splitlines()) == 1
+    pending, success = map(json.loads, store.notifications_path.read_text().splitlines())
+    assert pending["attempt_id"] == success["attempt_id"] == result["notification"]["attempt_id"]
+    assert success["state"] == "sent"
 
 
 def test_waited_delivery_records_discord_message_id(tmp_path, monkeypatch):
@@ -134,6 +139,47 @@ def test_cli_reports_missing_notification_as_nonzero_after_persistence(tmp_path,
     assert code == 1
     assert result["notification"]["state"] == "not-configured"
     assert SafetyIncidentStore("sample", root_override=tmp_path).get(result["incident"]["incident_id"])
+
+
+def test_explicit_agent_report_route_returns_stored_id_without_notification(tmp_path, capsys, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    assert not store.events_path.exists()  # Merely opening a lane does not infer incidents.
+    monkeypatch.setattr(SafetyIncidentStore, "notify", Mock(side_effect=AssertionError("must not notify")))
+    code = incidents.main([
+        "--program", "sample", "--lane", "web", "--root", str(tmp_path),
+        "report", "--producer", "hunter", "--run-id", "run", "--category", "production-risk",
+        "--outcome", "attempted", "--action", "stopped before a write", "--subject", "server",
+        "--impact", "none observed", "--containment", "stopped", "--no-notify",
+    ])
+    receipt = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert receipt["incident_id"] == receipt["incident"]["incident_id"]
+    assert receipt["notification"] is None
+    assert store.get(receipt["incident_id"]) == receipt["incident"]
+    assert len(store.events_path.read_text().splitlines()) == 1
+    assert not store.notifications_path.exists()
+
+
+def test_explicit_agent_report_rejects_invalid_fields_without_write(tmp_path, capsys, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setattr(SafetyIncidentStore, "notify", Mock(side_effect=AssertionError("must not notify")))
+    common = [
+        "--program", "sample", "--lane", "web", "--root", str(tmp_path),
+        "report", "--producer", "hunter", "--run-id", "run", "--category", "production-risk",
+        "--action", "attempted write", "--subject", "server", "--impact", "uncertain",
+        "--containment", "stopped",
+    ]
+    invalid = common.copy()
+    invalid[invalid.index("attempted write")] = "   "
+    assert incidents.main(invalid) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "safety incident operation failed" in captured.err
+    with pytest.raises(SystemExit) as error:
+        incidents.main(common + ["--outcome", "not-an-outcome"])
+    assert error.value.code == 2
+    assert not store.events_path.exists()
+    assert not store.notifications_path.exists()
 
 
 def test_interrupted_tail_is_separated_before_next_incident(tmp_path):
@@ -361,3 +407,65 @@ def test_control_only_embed_field_has_discord_valid_fallback(tmp_path, monkeypat
     monkeypatch.setattr(incidents, "build_opener", lambda *args: Mock(open=deliver))
     sample(store, action="\x1b", impact="\x1b")
     assert all(field["value"] for field in payloads[0]["embeds"][0]["fields"])
+
+
+def test_status_history_appends_without_editing_original_report(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setattr(store, "notify", Mock(side_effect=AssertionError("status changes must not send")))
+    original = sample(store, notify=False)["incident"]
+    original_bytes = store.events_path.read_bytes()
+
+    first = store.append_status(original["incident_id"], status="investigating", producer="operator", note="Review begun")
+    second = store.append_status(original["incident_id"], status="contained", producer="operator", note="Credential rotated")
+    history = store.history(original["incident_id"])
+
+    assert store.events_path.read_bytes().startswith(original_bytes)
+    assert store.get(original["incident_id"]) == original
+    assert history == [original, first, second]
+    assert first["record_type"] == second["record_type"] == "status"
+    assert first["event_id"] != second["event_id"]
+    assert first["incident_id"] == second["incident_id"] == original["incident_id"]
+    assert [row["status"] for row in history[1:]] == ["investigating", "contained"]
+    history[0]["action"] = "tampered"
+    reopened = SafetyIncidentStore("sample", root_override=tmp_path)
+    assert reopened.get(original["incident_id"]) == original
+    assert reopened.history(original["incident_id"]) == [original, first, second]
+    assert not hasattr(store, "update") and not hasattr(store, "delete")
+
+
+def test_status_validation_and_redaction_do_not_mutate_report(tmp_path):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    original = sample(store, notify=False)["incident"]
+    original_bytes = store.events_path.read_bytes()
+    with pytest.raises(ValueError):
+        store.append_status("SI-missing", status="resolved", producer="operator", note="checked")
+    with pytest.raises(ValueError):
+        store.append_status(original["incident_id"], status="", producer="operator", note="checked")
+    assert store.events_path.read_bytes() == original_bytes
+    assert store.history("SI-missing") == []
+
+    status = store.append_status(
+        original["incident_id"], status="investigating", producer="operator",
+        note="Review https://site.test/?token=private",
+    )
+    assert "private" not in store.events_path.read_text()
+    assert status["note"] == "Review https://site.test/?token=REDACTED"
+    assert store.get(original["incident_id"]) == original
+
+
+def test_notification_receipts_link_distinct_attempts_without_mutating_report(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.delenv(incidents.WEBHOOK_ENV, raising=False)
+    result = sample(store, notify=False)
+    incident_id = result["incident"]["incident_id"]
+    original = store.events_path.read_bytes()
+
+    first = store.notify(incident_id)
+    second = store.notify(incident_id)
+    receipts = [json.loads(line) for line in store.notifications_path.read_text().splitlines()]
+    assert [row["state"] for row in receipts] == ["pending", "not-configured", "pending", "not-configured"]
+    assert receipts[0]["attempt_id"] == receipts[1]["attempt_id"] == first["attempt_id"]
+    assert receipts[2]["attempt_id"] == receipts[3]["attempt_id"] == second["attempt_id"]
+    assert first["attempt_id"] != second["attempt_id"]
+    assert all(row["incident_id"] == incident_id for row in receipts)
+    assert store.events_path.read_bytes() == original
