@@ -137,9 +137,43 @@ class SafetyIncidentStore:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(row, dict) and row.get("incident_id") == incident_id:
+            if isinstance(row, dict) and row.get("incident_id") == incident_id and row.get("record_type", "report") == "report":
                 return row
         return None
+
+    def history(self, incident_id: str) -> list[dict[str, Any]]:
+        """Read the original report and subsequent status entries in append order."""
+        if self.get(incident_id) is None:
+            return []
+        rows = []
+        for line in self.events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("incident_id") == incident_id and row.get("record_type", "report") in ("report", "status"):
+                rows.append(row)
+        return rows
+
+    def append_status(self, incident_id: str, *, status: str, producer: str, note: str) -> dict[str, Any]:
+        """Append an attributed status change; never rewrite the original report."""
+        status = _required(status, "status")
+        producer = _required(producer, "producer")
+        note = _required(note, "note")
+        if self.get(incident_id) is None:
+            raise ValueError("incident not found in this program/lane")
+        row = redact_event_value(_safe({
+            "schema_version": 1,
+            "record_type": "status",
+            "event_id": f"SE-{uuid4().hex}",
+            "incident_id": incident_id,
+            "timestamp": utc_timestamp(),
+            "producer": producer,
+            "status": status,
+            "note": note,
+        }))
+        _append(self.events_path, row)
+        return row
 
     def notify(self, incident_id: str) -> dict[str, Any]:
         """Make one bounded delivery attempt and persist its disposition.

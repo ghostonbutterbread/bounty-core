@@ -206,3 +206,47 @@ def test_invalid_cli_family_has_safe_error(tmp_path, capsys):
     code = incidents.main(["--program", "sample", "--lane", "web", "--family", "bad", "--root", str(tmp_path), "notify", "SI-unknown"])
     assert code == 2
     assert "traceback" not in capsys.readouterr().err.lower()
+
+
+def test_status_history_appends_without_editing_original_report(tmp_path, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setattr(store, "notify", Mock(side_effect=AssertionError("status changes must not send")))
+    original = sample(store, notify=False)["incident"]
+    original_bytes = store.events_path.read_bytes()
+
+    first = store.append_status(original["incident_id"], status="investigating", producer="operator", note="Review begun")
+    second = store.append_status(original["incident_id"], status="contained", producer="operator", note="Credential rotated")
+    history = store.history(original["incident_id"])
+
+    assert store.events_path.read_bytes().startswith(original_bytes)
+    assert store.get(original["incident_id"]) == original
+    assert history == [original, first, second]
+    assert first["record_type"] == second["record_type"] == "status"
+    assert first["event_id"] != second["event_id"]
+    assert first["incident_id"] == second["incident_id"] == original["incident_id"]
+    assert [row["status"] for row in history[1:]] == ["investigating", "contained"]
+    history[0]["action"] = "tampered"
+    reopened = SafetyIncidentStore("sample", root_override=tmp_path)
+    assert reopened.get(original["incident_id"]) == original
+    assert reopened.history(original["incident_id"]) == [original, first, second]
+    assert not hasattr(store, "update") and not hasattr(store, "delete")
+
+
+def test_status_validation_and_redaction_do_not_mutate_report(tmp_path):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    original = sample(store, notify=False)["incident"]
+    original_bytes = store.events_path.read_bytes()
+    with pytest.raises(ValueError):
+        store.append_status("SI-missing", status="resolved", producer="operator", note="checked")
+    with pytest.raises(ValueError):
+        store.append_status(original["incident_id"], status="", producer="operator", note="checked")
+    assert store.events_path.read_bytes() == original_bytes
+    assert store.history("SI-missing") == []
+
+    status = store.append_status(
+        original["incident_id"], status="investigating", producer="operator",
+        note="Review https://site.test/?token=private",
+    )
+    assert "private" not in store.events_path.read_text()
+    assert status["note"] == "Review https://site.test/?token=REDACTED"
+    assert store.get(original["incident_id"]) == original

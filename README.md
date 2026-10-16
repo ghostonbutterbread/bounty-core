@@ -66,6 +66,17 @@ paths are also redacted defensively. Give concise sanitized context in `action`,
 `subject`, `impact`, and `containment`. A notification carries only incident ID,
 program/lane, category, and outcome, not the free-text evidence.
 
+The original version-1 report row retains its `incident_id`, timestamp,
+program/family/lane, producer, run ID, category, outcome, action, subject,
+impact, and containment. It is never edited through this interface. For a
+subsequent status change, call `store.append_status(incident_id, status=...,
+producer=..., note=...)`. This appends a version-1 `record_type: status` row
+with its own `event_id` and timestamp to the same stream; `store.get(id)` always
+returns the original report, and `store.history(id)` returns report and status
+rows in append order. Notification attempts stay in the separate receipt stream.
+The interface exposes no overwrite or delete operation. File-system operators
+must still protect the underlying storage from direct modification.
+
 ```bash
 python -m bounty_core.safety_cli --program PROGRAM --lane web record \
   --producer AGENT --run-id RUN --category non-owned-mutation \
