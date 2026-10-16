@@ -6,8 +6,8 @@
 - **Base commit:** `ce8718b6bfb39fb08533f506bd2bfe627b52e5da` (`origin/beta`)
 - **Intended integration target:** `beta`
 - **Last updated:** 2026-10-15
-- **Latest immutable recovery checkpoint:** none before task commit; branch tip is the recovery ref
-- **Feature implementation commit(s):** task commit at branch tip (see handoff SHA)
+- **Latest immutable recovery checkpoint:** `d8f19fb9e1de0cc3dd38f8da53ced6018f816805` on `feat/safety-incident-alert-ux`
+- **Feature implementation commit(s):** `35b7c894a3fdaf9b03aba3c51d3314b052330850`, `d8f19fb9e1de0cc3dd38f8da53ced6018f816805`
 - **Inspiration / canonical references:** safety incident API and CLI in `bounty_core/safety_incidents.py`; README safety incident section
 
 ## Intent and implemented contract
@@ -33,8 +33,8 @@ Add an operator-readable alert after durable recording without changing notifica
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/safety-incident-alert-ux`
-- **Latest immutable recovery checkpoint:** task commit at branch tip (see handoff SHA).
-- **Feature implementation commit(s):** task commit at branch tip.
+- **Latest immutable recovery checkpoint:** `d8f19fb9e1de0cc3dd38f8da53ced6018f816805` on `feat/safety-incident-alert-ux`; verify later dossier-only commit separately.
+- **Feature implementation commit(s):** `35b7c894a3fdaf9b03aba3c51d3314b052330850`, `d8f19fb9e1de0cc3dd38f8da53ced6018f816805`.
 - **Exact resume point:** independent review of branch diff and offline receipts; reconcile current `beta` before any integration.
 - **Working-tree state at handoff:** expected clean after commit.
 
