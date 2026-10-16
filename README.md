@@ -78,12 +78,18 @@ The interface exposes no overwrite or delete operation. File-system operators
 must still protect the underlying storage from direct modification.
 
 ```bash
-python -m bounty_core.safety_cli --program PROGRAM --lane web record \
+python -m bounty_core.safety_cli --program PROGRAM --lane web report \
   --producer AGENT --run-id RUN --category non-owned-mutation \
   --outcome uncertain --action 'POST changed an object' \
   --subject 'object ownership uncertain' --impact 'possible non-owned mutation' \
   --containment 'stopped further writes; awaiting operator'
 ```
+
+`report` is an explicit agent action, not an automatic inference from normal
+testing activity. Its JSON receipt includes a top-level `incident_id` and the
+stored `incident` (including the same ID), plus the separate `notification`
+receipt. The older `record` command remains an alias for existing callers.
+Invalid inputs do not create a report or attempt a notification.
 
 The record is fsynced **before** any network delivery. With no configuration, the
 command records a `not-configured` notification receipt and exits 1; it does not

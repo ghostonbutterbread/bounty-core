@@ -136,6 +136,47 @@ def test_cli_reports_missing_notification_as_nonzero_after_persistence(tmp_path,
     assert SafetyIncidentStore("sample", root_override=tmp_path).get(result["incident"]["incident_id"])
 
 
+def test_explicit_agent_report_route_returns_stored_id_without_notification(tmp_path, capsys, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    assert not store.events_path.exists()  # Merely opening a lane does not infer incidents.
+    monkeypatch.setattr(SafetyIncidentStore, "notify", Mock(side_effect=AssertionError("must not notify")))
+    code = incidents.main([
+        "--program", "sample", "--lane", "web", "--root", str(tmp_path),
+        "report", "--producer", "hunter", "--run-id", "run", "--category", "production-risk",
+        "--outcome", "attempted", "--action", "stopped before a write", "--subject", "server",
+        "--impact", "none observed", "--containment", "stopped", "--no-notify",
+    ])
+    receipt = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert receipt["incident_id"] == receipt["incident"]["incident_id"]
+    assert receipt["notification"] is None
+    assert store.get(receipt["incident_id"]) == receipt["incident"]
+    assert len(store.events_path.read_text().splitlines()) == 1
+    assert not store.notifications_path.exists()
+
+
+def test_explicit_agent_report_rejects_invalid_fields_without_write(tmp_path, capsys, monkeypatch):
+    store = SafetyIncidentStore("sample", root_override=tmp_path)
+    monkeypatch.setattr(SafetyIncidentStore, "notify", Mock(side_effect=AssertionError("must not notify")))
+    common = [
+        "--program", "sample", "--lane", "web", "--root", str(tmp_path),
+        "report", "--producer", "hunter", "--run-id", "run", "--category", "production-risk",
+        "--action", "attempted write", "--subject", "server", "--impact", "uncertain",
+        "--containment", "stopped",
+    ]
+    invalid = common.copy()
+    invalid[invalid.index("attempted write")] = "   "
+    assert incidents.main(invalid) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "safety incident operation failed" in captured.err
+    with pytest.raises(SystemExit) as error:
+        incidents.main(common + ["--outcome", "not-an-outcome"])
+    assert error.value.code == 2
+    assert not store.events_path.exists()
+    assert not store.notifications_path.exists()
+
+
 def test_interrupted_tail_is_separated_before_next_incident(tmp_path):
     store = SafetyIncidentStore("sample", root_override=tmp_path)
     first = sample(store, notify=False)["incident"]["incident_id"]

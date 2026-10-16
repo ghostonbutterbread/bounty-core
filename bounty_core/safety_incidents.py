@@ -229,7 +229,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", required=True)
     parser.add_argument("--root", help="optional explicit storage root")
     commands = parser.add_subparsers(dest="command", required=True)
-    record = commands.add_parser("record")
+    record = commands.add_parser(
+        "report", aliases=["record"],
+        help="explicitly report an agent safety incident (record is a legacy alias)",
+    )
     for field in ("producer", "run-id", "action", "subject", "impact", "containment"):
         record.add_argument("--" + field, required=True)
     record.add_argument("--category", required=True, choices=sorted(CATEGORIES))
@@ -240,12 +243,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         store = SafetyIncidentStore(args.program, family=args.family, lane=args.lane, root_override=args.root)
-        if args.command == "record":
+        if args.command in ("report", "record"):
             result = store.record(
                 producer=args.producer, run_id=args.run_id, category=args.category,
                 action=args.action, subject=args.subject, impact=args.impact,
                 containment=args.containment, outcome=args.outcome, notify=not args.no_notify,
             )
+            result["incident_id"] = result["incident"]["incident_id"]
         else:
             result = {"notification": store.notify(args.incident_id)}
     except (ValueError, OSError) as exc:
