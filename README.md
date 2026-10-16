@@ -63,18 +63,27 @@ attempts and their status are in `notifications.jsonl`; they are not finding
 severity or proof packets. Keep raw requests/responses, customer data, secrets,
 and webhook URLs out of descriptions; common credentials and Discord webhook
 paths are also redacted defensively. Give concise sanitized context in `action`,
-`subject`, `impact`, and `containment`. A notification carries only incident ID,
-program/lane, category, and outcome, not the free-text evidence.
+`subject`, `impact`, and `containment`. The Discord alert includes a short urgency
+line (ID, severity, program/lane, category, outcome) and a severity-colored embed
+with sanitized, single-line, bounded `action`, `impact`, and `containment`. Do not
+put raw requests, customer data, or secrets in those fields: defensive redaction
+is not a substitute for preparing safe summaries. Discord mentions are disabled.
 
 ```bash
 python -m bounty_core.safety_cli --program PROGRAM --lane web record \
   --producer AGENT --run-id RUN --category non-owned-mutation \
-  --outcome uncertain --action 'POST changed an object' \
+  --outcome uncertain --severity high --action 'POST changed an object' \
   --subject 'object ownership uncertain' --impact 'possible non-owned mutation' \
   --containment 'stopped further writes; awaiting operator'
 ```
 
-The record is fsynced **before** any network delivery. With no configuration, the
+`--severity` is optional (`unknown` by default); choices are `unknown`, `low`,
+`medium`, `high`, and `critical`. Library callers can likewise pass `severity=`
+to `SafetyIncidentStore.record(...)`; existing callers default to `unknown` and
+older incidents without severity remain retriable. The CLI prints a brief saved
+ID/category/severity/action to **stderr** immediately after fsync and before
+notification, then emits the unchanged final JSON on **stdout**. The record is
+fsynced **before** any network delivery. With no configuration, the
 command records a `not-configured` notification receipt and exits 1; it does not
 silently claim an alert was delivered. Configure an **operator-approved** Discord
 webhook as `DISCORD_SAFETY_WEBHOOK_URL` in the process secret environment, never
