@@ -6,8 +6,8 @@
 - **Base commit:** `763afe0bc9a5d792f7aaf3c06881e943d3566046` (status-event parent; itself based on `ce8718b6bfb39fb08533f506bd2bfe627b52e5da` from beta)
 - **Intended integration target:** `beta`, after t_701a1867 review and root integration
 - **Last updated:** 2026-10-15
-- **Latest immutable recovery checkpoint:** none yet; implementation commit below will be recorded in the handoff update
-- **Feature implementation commit(s):** none yet
+- **Latest immutable recovery checkpoint:** `030923f21c71fff622bc9e20c807ec25827e6920`
+- **Feature implementation commit(s):** `030923f21c71fff622bc9e20c807ec25827e6920`
 - **Inspiration / canonical reference:** existing `SafetyIncidentStore.record` and `bounty_core.safety_cli record` on beta
 
 ## Intent and contract
@@ -34,10 +34,10 @@ Add an explicitly named `python -m bounty_core.safety_cli ... report` route for 
 ## Interruption / resume handoff
 
 - **Owning feature branch/ref:** `feat/explicit-agent-safety-report-t_e1745b25`
-- **Latest immutable recovery checkpoint:** pending implementation commit; update before handoff.
-- **Feature implementation commit(s):** pending.
+- **Latest immutable recovery checkpoint:** `030923f21c71fff622bc9e20c807ec25827e6920`; this handoff update is a later dossier-only commit.
+- **Feature implementation commit(s):** `030923f21c71fff622bc9e20c807ec25827e6920`.
 - **Exact resume point:** verify branch tip against tests, review sibling overlap, hand off to t_701a1867 and root.
-- **Working-tree state at handoff:** to be committed clean.
+- **Working-tree state at handoff:** clean after committing this dossier update.
 
 ## Decision gates
 
