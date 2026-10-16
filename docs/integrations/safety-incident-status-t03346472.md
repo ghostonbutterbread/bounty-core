@@ -7,8 +7,8 @@
 - Intended integration target: `beta` (not main; no activation here)
 - Last updated: 2026-10-15
 - Owning feature branch/ref: `feat/safety-incident-status-events-t03346472`
-- Latest immutable recovery checkpoint: none yet (initial implementation commit pending)
-- Feature implementation commit(s): none yet
+- Latest immutable recovery checkpoint: `9f660310d9785fa832ab5dddc20dbe6f0641633b`
+- Feature implementation commit(s): `9f660310d9785fa832ab5dddc20dbe6f0641633b`
 - Inspiration / canonical reference: existing `bounty_core/safety_incidents.py` report and notification streams on beta.
 
 ## Intent
@@ -39,10 +39,10 @@ Complete the append-only store contract for status changes without duplicating t
 ## Interruption / resume handoff
 
 - Owning feature branch/ref: `feat/safety-incident-status-events-t03346472`
-- Latest immutable recovery checkpoint: pending initial commit; update after committing.
-- Feature implementation commit(s): pending initial commit.
-- Exact resume point: commit verified implementation and update checkpoint; then hand off to root integration.
-- Working-tree state at handoff: initially dirty until committed.
+- Latest immutable recovery checkpoint: `9f660310d9785fa832ab5dddc20dbe6f0641633b` (implementation and initial dossier).
+- Feature implementation commit(s): `9f660310d9785fa832ab5dddc20dbe6f0641633b`.
+- Exact resume point: root should inspect this implementation commit plus the later dossier-only handoff tip, obtain independent review and integrate into beta only if accepted.
+- Working-tree state at handoff: clean after dossier-only handoff commit.
 
 ## Decision gates
 
@@ -53,3 +53,4 @@ Complete the append-only store contract for status changes without duplicating t
 ## Decision record
 
 - 2026-10-15: Existing beta already has persistent reports/notification receipts; this task adds only status append/read and immutability tests.
+- 2026-10-15: Full offline suite passed (204); implementation checkpoint is `9f660310d9785fa832ab5dddc20dbe6f0641633b`. Root owns independent review and any integration.
