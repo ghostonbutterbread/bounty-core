@@ -158,9 +158,43 @@ class SafetyIncidentStore:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(row, dict) and row.get("incident_id") == incident_id:
+            if isinstance(row, dict) and row.get("incident_id") == incident_id and row.get("record_type", "report") == "report":
                 return row
         return None
+
+    def history(self, incident_id: str) -> list[dict[str, Any]]:
+        """Read the original report and subsequent status entries in append order."""
+        if self.get(incident_id) is None:
+            return []
+        rows = []
+        for line in self.events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("incident_id") == incident_id and row.get("record_type", "report") in ("report", "status"):
+                rows.append(row)
+        return rows
+
+    def append_status(self, incident_id: str, *, status: str, producer: str, note: str) -> dict[str, Any]:
+        """Append an attributed status change; never rewrite the original report."""
+        status = _required(status, "status")
+        producer = _required(producer, "producer")
+        note = _required(note, "note")
+        if self.get(incident_id) is None:
+            raise ValueError("incident not found in this program/lane")
+        row = redact_event_value(_safe({
+            "schema_version": 1,
+            "record_type": "status",
+            "event_id": f"SE-{uuid4().hex}",
+            "incident_id": incident_id,
+            "timestamp": utc_timestamp(),
+            "producer": producer,
+            "status": status,
+            "note": note,
+        }))
+        _append(self.events_path, row)
+        return row
 
     def notify(self, incident_id: str) -> dict[str, Any]:
         """Make one bounded delivery attempt and persist its disposition.
@@ -174,7 +208,8 @@ class SafetyIncidentStore:
         # An attempt receipt is fsynced before the network request. If a final
         # disposition cannot be written, operators can still see an unknown
         # delivery and must check the channel before retrying.
-        _append(self.notifications_path, {"incident_id": incident_id, "timestamp": utc_timestamp(), "state": "pending"})
+        attempt_id = f"NA-{uuid4().hex}"
+        _append(self.notifications_path, {"incident_id": incident_id, "attempt_id": attempt_id, "timestamp": utc_timestamp(), "state": "pending"})
         url = os.environ.get(WEBHOOK_ENV, "")
         message_id = None
         if not url:
@@ -215,7 +250,7 @@ class SafetyIncidentStore:
                 state = f"http-{exc.code}"
             except (URLError, TimeoutError, OSError):
                 state = "delivery-unknown"
-        receipt = {"incident_id": incident_id, "timestamp": utc_timestamp(), "state": state}
+        receipt = {"incident_id": incident_id, "attempt_id": attempt_id, "timestamp": utc_timestamp(), "state": state}
         if message_id is not None:
             receipt["message_id"] = message_id
         _append(self.notifications_path, receipt)
@@ -241,7 +276,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", required=True)
     parser.add_argument("--root", help="optional explicit storage root")
     commands = parser.add_subparsers(dest="command", required=True)
-    record = commands.add_parser("record")
+    record = commands.add_parser(
+        "report", aliases=["record"],
+        help="explicitly report an agent safety incident (record is a legacy alias)",
+    )
     for field in ("producer", "run-id", "action", "subject", "impact", "containment"):
         record.add_argument("--" + field, required=True)
     record.add_argument("--category", required=True, choices=sorted(CATEGORIES))
@@ -253,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         store = SafetyIncidentStore(args.program, family=args.family, lane=args.lane, root_override=args.root)
-        if args.command == "record":
+        if args.command in ("report", "record"):
             result = store.record(
                 producer=args.producer, run_id=args.run_id, category=args.category,
                 action=args.action, subject=args.subject, impact=args.impact,
@@ -261,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
                 notify=not args.no_notify,
                 on_saved=_console_saved,
             )
+            result["incident_id"] = result["incident"]["incident_id"]
         else:
             result = {"notification": store.notify(args.incident_id)}
     except (ValueError, OSError) as exc:
