@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
@@ -24,6 +24,10 @@ from .storage import resolve_storage
 WEBHOOK_ENV = "DISCORD_SAFETY_WEBHOOK_URL"
 CATEGORIES = {"non-owned-mutation", "production-risk", "scope-violation", "sensitive-exposure", "other"}
 OUTCOMES = {"occurred", "attempted", "uncertain"}
+SEVERITY_COLORS = {
+    "unknown": 0x95A5A6, "low": 0x3498DB, "medium": 0xF1C40F,
+    "high": 0xE67E22, "critical": 0xE74C3C,
+}
 # The ordinary evidence redactor does not recognize opaque Discord webhook paths.
 _WEBHOOK_RE = re.compile(
     r"(?:https?://)?(?:canary\.|ptb\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/[^\s\"'<>]+", re.I
@@ -49,6 +53,17 @@ def _required(value: str, field: str) -> str:
     if not text:
         raise ValueError(f"{field} is required")
     return text
+
+
+def _display(value: Any, limit: int) -> str:
+    """Single-line, bounded, non-mention text for operator-facing summaries."""
+    text = " ".join("".join(
+        char for char in str(redact_event_value(_safe(value))) if char.isprintable() or char.isspace()
+    ).split())
+    text = text.replace("@", "＠")
+    if not text:
+        return "[no displayable text]"
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _append(path: Path, row: Mapping[str, Any]) -> None:
@@ -92,7 +107,8 @@ class SafetyIncidentStore:
     def record(
         self, *, producer: str, run_id: str, category: str, action: str,
         subject: str, impact: str, containment: str, outcome: str = "uncertain",
-        notify: bool = True,
+        notify: bool = True, severity: str = "unknown",
+        on_saved: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Persist immediately; never lose an incident because notification fails.
 
@@ -103,6 +119,8 @@ class SafetyIncidentStore:
             raise ValueError(f"invalid category: {category!r}")
         if outcome not in OUTCOMES:
             raise ValueError(f"invalid outcome: {outcome!r}")
+        if severity not in SEVERITY_COLORS:
+            raise ValueError(f"invalid severity: {severity!r}")
         event = {
             "schema_version": 1,
             "incident_id": f"SI-{uuid4().hex}",
@@ -114,6 +132,7 @@ class SafetyIncidentStore:
             "run_id": _required(run_id, "run_id"),
             "category": category,
             "outcome": outcome,
+            "severity": severity,
             "action": _required(action, "action"),
             "subject": _required(subject, "subject"),
             "impact": _required(impact, "impact"),
@@ -121,6 +140,8 @@ class SafetyIncidentStore:
         }
         stored = redact_event_value(_safe(event))
         _append(self.events_path, stored)
+        if on_saved is not None:
+            on_saved(stored)
         try:
             receipt = self.notify(stored["incident_id"]) if notify else None
         except OSError:
@@ -161,11 +182,24 @@ class SafetyIncidentStore:
         elif not _WEBHOOK_ENDPOINT_RE.fullmatch(url):
             state = "invalid-configuration"
         else:
+            severity = incident.get("severity", "unknown")
+            if severity not in SEVERITY_COLORS:
+                severity = "unknown"
             content = (
-                f"Safety incident {incident_id} | {self.program}/{self.lane} | "
-                f"{incident['category']} ({incident['outcome']}). Stop/contain; review the lane-local record."
+                f"Safety incident {incident_id} | {severity.upper()} | "
+                f"{_display(self.program, 80)}/{_display(self.lane, 40)} | "
+                f"{_display(incident['category'], 80)} ({_display(incident['outcome'], 40)}). "
+                "Stop unsafe work; contain only with authorization and review the lane-local record."
             )
-            payload = json.dumps({"content": content, "allowed_mentions": {"parse": []}}).encode("utf-8")
+            embed = {
+                "title": "Safety incident — operator review needed",
+                "color": SEVERITY_COLORS[severity],
+                "fields": [
+                    {"name": label, "value": _display(incident.get(key, "not recorded"), 1024)}
+                    for label, key in (("Action", "action"), ("Impact", "impact"), ("Containment", "containment"))
+                ],
+            }
+            payload = json.dumps({"content": content, "embeds": [embed], "allowed_mentions": {"parse": []}}).encode("utf-8")
             request = Request(url + "?wait=true", data=payload, headers={"Content-Type": "application/json", "User-Agent": WEBHOOK_USER_AGENT}, method="POST")
             try:
                 with build_opener(_NoRedirect()).open(request, timeout=5) as response:
@@ -200,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         record.add_argument("--" + field, required=True)
     record.add_argument("--category", required=True, choices=sorted(CATEGORIES))
     record.add_argument("--outcome", choices=sorted(OUTCOMES), default="uncertain")
+    record.add_argument("--severity", choices=sorted(SEVERITY_COLORS), default="unknown")
     record.add_argument("--no-notify", action="store_true")
     notification = commands.add_parser("notify", help="manually retry one incident ID; may duplicate a timed-out delivery")
     notification.add_argument("incident_id")
@@ -210,7 +245,12 @@ def main(argv: list[str] | None = None) -> int:
             result = store.record(
                 producer=args.producer, run_id=args.run_id, category=args.category,
                 action=args.action, subject=args.subject, impact=args.impact,
-                containment=args.containment, outcome=args.outcome, notify=not args.no_notify,
+                containment=args.containment, outcome=args.outcome, severity=args.severity,
+                notify=not args.no_notify,
+                on_saved=lambda event: print(
+                    f"Saved safety incident {event['incident_id']} ({event['category']}, "
+                    f"{event['severity']}): {_display(event['action'], 120)}", file=sys.stderr, flush=True
+                ),
             )
         else:
             result = {"notification": store.notify(args.incident_id)}
