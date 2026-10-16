@@ -1,6 +1,6 @@
 # Safety incident alert UX integration dossier
 
-- **Status:** feature (local verification complete; integration review pending)
+- **Status:** independently reviewed and accepted for beta integration; live rendering deferred
 - **Owner:** Hermes bugfix subagent
 - **Branch / owning ref:** `feat/safety-incident-alert-ux`
 - **Base commit:** `ce8718b6bfb39fb08533f506bd2bfe627b52e5da` (`origin/beta`)
@@ -21,8 +21,8 @@ Add an operator-readable alert after durable recording without changing notifica
 - `git diff --check` — clean.
 - Offline fixtures cover 5 colors, malformed/legacy severity, truncation, webhook redaction, mention/control suppression, 200/204 and invalid body, notification failure, fsync-before-stderr-before-network, failed receipt, and old callers.
 - Follow-up: an unavailable stderr after the durable write must not prevent webhook delivery. CLI console output now tolerates `OSError`; regression verifies the notification still runs. Focused `28 passed`, full `214 passed`, `git diff --check` clean.
-- Independent review: pending fresh release gate. No merge or push performed.
-- Merge/ancestry: branch based on `origin/beta` at `ce8718b6` when fetched.
+- Independent review: accepted after fresh `28 passed` focused and `214 passed` full; inspected diff, old callers/records, failure receipts, stderr-before-network, defensive redaction, and Discord's webhook payload contract (content 2000, rich embeds, wait response). No concrete release-blocking defect found. No live webhook was sent.
+- Merge/ancestry: fetched `origin/beta` at `ce8718b6`; feature remains a direct descendant. No merge or push performed at decision checkpoint.
 
 ## Blockers and deferred work
 
@@ -35,7 +35,7 @@ Add an operator-readable alert after durable recording without changing notifica
 - **Owning feature branch/ref:** `feat/safety-incident-alert-ux`
 - **Latest immutable recovery checkpoint:** `d8f19fb9e1de0cc3dd38f8da53ced6018f816805` on `feat/safety-incident-alert-ux`; verify later dossier-only commit separately.
 - **Feature implementation commit(s):** `35b7c894a3fdaf9b03aba3c51d3314b052330850`, `d8f19fb9e1de0cc3dd38f8da53ced6018f816805`.
-- **Exact resume point:** independent review of branch diff and offline receipts; reconcile current `beta` before any integration.
+- **Exact resume point:** integrate accepted feature into the fetched clean `beta` checkout, remove dossier, verify focused/full suite, publish/read back; do not activate or send a live webhook.
 - **Working-tree state at handoff:** expected clean after commit.
 
 ## Decision gates
@@ -47,3 +47,4 @@ Add an operator-readable alert after durable recording without changing notifica
 ## Decision record
 
 - 2026-10-15 — feature implemented and locally verified offline; handoff for review, no merge/push.
+- 2026-10-15 — independent release gate accepts for beta: fetched beta unchanged, reviewed actual branch diff and provider contract, reran focused/full checks, `git diff --check` clean. Live Discord rendering remains explicitly unverified and requires operator authorization. No live send or stable promotion.
