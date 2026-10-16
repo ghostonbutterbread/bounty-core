@@ -20,7 +20,8 @@ Add an operator-readable alert after durable recording without changing notifica
 - Full: `python -m pytest -q` — 213 passed.
 - `git diff --check` — clean.
 - Offline fixtures cover 5 colors, malformed/legacy severity, truncation, webhook redaction, mention/control suppression, 200/204 and invalid body, notification failure, fsync-before-stderr-before-network, failed receipt, and old callers.
-- Independent review: pending parent-agent review. No merge or push performed.
+- Follow-up: an unavailable stderr after the durable write must not prevent webhook delivery. CLI console output now tolerates `OSError`; regression verifies the notification still runs. Focused `28 passed`, full `214 passed`, `git diff --check` clean.
+- Independent review: pending fresh release gate. No merge or push performed.
 - Merge/ancestry: branch based on `origin/beta` at `ce8718b6` when fetched.
 
 ## Blockers and deferred work

@@ -222,6 +222,18 @@ class SafetyIncidentStore:
         return receipt
 
 
+def _console_saved(event: Mapping[str, Any]) -> None:
+    """A broken terminal must not suppress delivery of a durable incident."""
+    try:
+        print(
+            f"Saved safety incident {event['incident_id']} ({event['category']}, "
+            f"{event['severity']}): {_display(event['action'], 120)}",
+            file=sys.stderr, flush=True,
+        )
+    except OSError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record an agent safety incident before attempting a Discord alert")
     parser.add_argument("--program", required=True)
@@ -247,10 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                 action=args.action, subject=args.subject, impact=args.impact,
                 containment=args.containment, outcome=args.outcome, severity=args.severity,
                 notify=not args.no_notify,
-                on_saved=lambda event: print(
-                    f"Saved safety incident {event['incident_id']} ({event['category']}, "
-                    f"{event['severity']}): {_display(event['action'], 120)}", file=sys.stderr, flush=True
-                ),
+                on_saved=_console_saved,
             )
         else:
             result = {"notification": store.notify(args.incident_id)}

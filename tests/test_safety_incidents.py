@@ -276,6 +276,29 @@ def test_cli_reports_fsynced_incident_on_stderr_before_network(tmp_path, monkeyp
     assert json.loads(output.out)["incident"]["severity"] == "high"
 
 
+def test_broken_terminal_does_not_suppress_notification(tmp_path, monkeypatch, capsys):
+    calls = []
+    def notify(self, incident_id):
+        assert self.get(incident_id) is not None
+        calls.append(incident_id)
+        return {"incident_id": incident_id, "state": "sent"}
+    class BrokenTerminal:
+        def write(self, text):
+            raise BrokenPipeError("terminal closed")
+    monkeypatch.setattr(SafetyIncidentStore, "notify", notify)
+    monkeypatch.setattr(incidents.sys, "stderr", BrokenTerminal())
+    code = incidents.main([
+        "--program", "sample", "--lane", "web", "--root", str(tmp_path), "record",
+        "--producer", "hunter", "--run-id", "run", "--category", "production-risk",
+        "--action", "dangerous POST", "--subject", "server", "--impact", "uncertain",
+        "--containment", "stopped",
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert calls == [result["incident"]["incident_id"]]
+    assert result["notification"]["state"] == "sent"
+
+
 def test_old_caller_defaults_unknown_and_invalid_severity_writes_nothing(tmp_path):
     store = SafetyIncidentStore("sample", root_override=tmp_path)
     assert sample(store, notify=False)["incident"]["severity"] == "unknown"
