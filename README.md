@@ -20,8 +20,12 @@ Each lane keeps its own `reports/`, `ledgers/`, `working/`, `context/`, `notes/`
 ## Batch identity reservation (opt-in)
 
 `VersionedFindingsLedger.reserve_batch(candidates)` accepts a list of at most
-1,000 finding dictionaries and returns ordered `(exists, fid, merged_finding)`
-results like `check()`. An empty list returns without a write. Existing identity
+1,000 finding dictionaries (including `dict` subclasses; other mappings and
+iterable key-value pairs are rejected) and returns ordered
+`(exists, fid, merged_finding)` results like `check()`. A non-dictionary
+candidate raises `ValueError` identifying its zero-based index, before ledger
+replacement. Caller dictionaries are not mutated. An empty list returns without
+a write. Existing identity
 matching takes precedence over an explicit FID; each new or earlier batch entry
 participates in subsequent matching and generated FID allocation. An invalid or
 conflicting FID raises `ValueError` before the ledger is replaced. Cooperating

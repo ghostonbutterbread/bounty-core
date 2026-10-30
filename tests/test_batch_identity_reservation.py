@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+from collections import UserDict
 from unittest.mock import patch
 
 import pytest
@@ -79,6 +80,37 @@ def test_late_invalid_fid_does_not_write(tmp_path):
     assert ledger.path.read_bytes() == before
 
 
+@pytest.mark.parametrize("invalid", [[], [("file", "src/fabricated.py")], (), None, "bad", UserDict({"file": "src/x.py"})])
+def test_late_non_dict_candidate_does_not_write(tmp_path, invalid):
+    ledger = make_ledger(tmp_path)
+    ledger.check(candidate("seed", "D01"))
+    before = ledger.path.read_bytes()
+    first = candidate("first", "D02")
+    with patch("bounty_core.ledger._write_json_atomic") as write:
+        with pytest.raises(ValueError, match=r"candidate at index 1 must be a dictionary"):
+            ledger.reserve_batch([first, invalid])
+    write.assert_not_called()
+    assert ledger.path.read_bytes() == before
+    assert first == candidate("first", "D02")
+
+
+def test_batch_accepts_dict_subclasses_without_mutating_input(tmp_path):
+    import copy
+
+    class Finding(dict):
+        pass
+
+    first = Finding(candidate("first"), tags=["original"])
+    second = candidate("first", "D99")
+    incoming = [first, second, candidate("last")]
+    before = copy.deepcopy(incoming)
+    results = make_ledger(tmp_path).reserve_batch(incoming)
+    assert [(exists, fid) for exists, fid, _ in results] == [
+        (False, "D01"), (True, "D01"), (False, "D02")
+    ]
+    assert incoming == before
+
+
 def test_write_failure_propagates_and_original_ledger_survives(tmp_path):
     ledger = make_ledger(tmp_path)
     ledger.check(candidate("seed", "D01"))
@@ -100,52 +132,75 @@ def test_single_check_regression_and_batch_bounds(tmp_path):
     assert ledger.path.read_bytes() == before
 
 
-def _batch_writer(root, at_write, release, output):
+def _batch_writer(root, phase, entered, release, output):
     import bounty_core.ledger as module
     ledger = make_ledger(root)
-    original = module._write_json_atomic
+    original_write = module._write_json_atomic
+    original_lookup = module._find_existing
 
-    def paused(path, payload):
-        at_write.set()
+    def wait_for_release():
+        entered.set()
         if not release.wait(10):
             raise RuntimeError("test release timeout")
-        original(path, payload)
+
+    def paused_write(path, payload):
+        if phase == "pre-replace":
+            wait_for_release()
+        return original_write(path, payload)
+
+    def paused_lookup(findings, finding):
+        if phase == "validation" and finding.get("file") == "src/second.py":
+            assert any(item.get("fid") == "D07" for item in findings)
+            wait_for_release()
+        return original_lookup(findings, finding)
 
     try:
-        with patch.object(module, "_write_json_atomic", paused):
-            output.put(("batch", ledger.reserve_batch([candidate("first", "D07"), candidate("second", "D08")])[:2]))
+        with patch.object(module, "_write_json_atomic", paused_write), patch.object(module, "_find_existing", paused_lookup):
+            output.put(("batch", ledger.reserve_batch([candidate("first", "D07"), candidate("second", "D08")])))
     except Exception as exc:
         output.put(("batch-error", repr(exc)))
 
 
-def _competing_writer(root, attempting, output):
+def _competing_writer(root, blocked, done, output):
+    import fcntl
+    import bounty_core.ledger as module
     ledger = make_ledger(root)
-    attempting.set()
+    original_flock = module.fcntl.flock
+
+    def prove_contention(fd, operation):
+        if operation == fcntl.LOCK_SH:
+            try:
+                original_flock(fd, operation | fcntl.LOCK_NB)
+            except BlockingIOError:
+                blocked.set()
+            else:
+                raise AssertionError("competing acquisition succeeded while batch was paused")
+        return original_flock(fd, operation)
+
     try:
-        output.put(("competitor", ledger.check(candidate("other", "D08"))[:2]))
+        with patch.object(module.fcntl, "flock", prove_contention):
+            output.put(("competitor", ledger.check(candidate("other", "D08"))[:2]))
     except Exception as exc:
         output.put(("competitor-error", repr(exc)))
+    finally:
+        done.set()
 
 
-def test_competing_writer_waits_for_entire_batch(tmp_path):
-    import fcntl
-    from bounty_core.ledger import _lock_path
+@pytest.mark.parametrize("phase", ["validation", "pre-replace"])
+def test_competing_writer_waits_for_entire_batch(tmp_path, phase):
     ctx = multiprocessing.get_context("fork")
-    at_write, release, attempting = ctx.Event(), ctx.Event(), ctx.Event()
+    entered, release, blocked, done = (ctx.Event() for _ in range(4))
     output = ctx.Queue()
     ledger = make_ledger(tmp_path)
     ledger.check(candidate("seed", "D01"))
-    batch = ctx.Process(target=_batch_writer, args=(tmp_path, at_write, release, output))
-    competitor = ctx.Process(target=_competing_writer, args=(tmp_path, attempting, output))
+    batch = ctx.Process(target=_batch_writer, args=(tmp_path, phase, entered, release, output))
+    competitor = ctx.Process(target=_competing_writer, args=(tmp_path, blocked, done, output))
     batch.start()
     try:
-        assert at_write.wait(10)
-        lock_path = _lock_path(ledger.program, lane=ledger.lane, family=ledger.family, root_override=tmp_path)
-        with lock_path.open("a+") as lock:
-            with pytest.raises(BlockingIOError):
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert entered.wait(10), "batch failed to reach pause"
         competitor.start()
-        assert attempting.wait(10)
+        assert blocked.wait(10), "competitor never observed a nonblocking flock failure"
+        assert not done.is_set(), "competitor finished while batch held the lock"
     finally:
         release.set()
         batch.join(15)

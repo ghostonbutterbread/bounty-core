@@ -1275,8 +1275,10 @@ class VersionedFindingsLedger:
     def reserve_batch(self, candidates: list[dict[str, Any]]) -> list[tuple[bool, str | None, dict[str, Any]]]:
         """Reserve up to 1000 identities together, returning check-like results in order.
 
-        Conflicts raise before the ledger replacement. This protects reservations
-        only: packets, indexes, finalization and crash durability are separate.
+        Candidates must be dictionaries (including dict subclasses); other
+        mappings and iterable pairs are not accepted. Conflicts and invalid
+        candidates raise before replacement. This protects reservations only:
+        packets, indexes, finalization and crash durability are separate.
         """
         if not isinstance(candidates, list) or len(candidates) > 1000:
             raise ValueError("candidates must be a list of at most 1000 findings")
@@ -1285,7 +1287,9 @@ class VersionedFindingsLedger:
         results = []
         with _locked_payload(self.program, exclusive=True, lane=self.lane,
                              family=self.family, root_override=self.root_override) as payload:
-            for candidate in candidates:
+            for index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    raise ValueError(f"candidate at index {index} must be a dictionary")
                 finding = dict(candidate)
                 findings = payload.get("findings", [])
                 findings = findings if isinstance(findings, list) else []
