@@ -6,7 +6,7 @@
 - **Worktree:** `/home/ryushe/worktrees/bounty-core-batch-identity-tc8c8b748`
 - **Base:** freshly fetched `origin/beta` `c10866524a7fb30ac811fce8ef050fd5d8c922cc`; intended target `beta`.
 - **Last updated:** 2026-10-29.
-- **Latest immutable recovery checkpoint / implementation commit:** see feature branch tip; this dossier is committed with the implementation.
+- **Latest immutable recovery checkpoint / implementation commit:** `41c78bf174b18fb68e5110582a934e613e6747f2` (verify subsequent dossier-only handoff tip separately).
 - **Inspiration:** BBH published beta `f8a38feedc2326175bc216cb5ce3ec8f794f5c69`, installed provider pin `6c36ee88a60073e1b687ec32deeade24ffafdd4f` (ancestor of fetched beta); task `t_c8c8b748`, synthetic collision audit PC-20261030-013848-36ae0ab7.
 
 ## Intent and contract
@@ -20,7 +20,7 @@ This guarantees only reservation atomicity for cooperating writers and ordinary 
 - RED: test for late collision failed against the unmodified fetched beta due to missing API before implementation. Additional eight nonconcurrency batch tests run against a scratch archive of that same base all failed on missing API. The concurrency regression was not run red against the base.
 - GREEN: full provider suite `pytest -q tests`: **228 passed**. The interpreter was `/home/ryushe/projects/bug_bounty_harness/.venv/bin/python`, with `PYTHONPATH` resolving `bounty_core.ledger` to this feature worktree. Tests used synthetic temporary roots and a scratch HOME. A seccomp wrapper denied socket/connect/send calls; a socket probe returned `EPERM`. Wrapper used: `/home/ryushe/.hermes/profiles/bugfix/cache/scratch/manual-class-netdeny.py` (ephemeral; reproduce equivalent denial if unavailable). `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
 - New tests cover late existing and intra-batch collisions with unchanged bytes, duplicate/new ordering, allocation, loose duplicate matching, one replacement, invalid FID, injected `Path.replace` failure, unchanged single `check`, bounds, and a process/event coordinated competing writer plus nonblocking flock probe. `compileall` and `git diff --check` passed.
-- Independent provider review: **NOT YET DONE**. This child session has no delegation tool. Parent must dispatch a separate no-edit provider reviewer against the committed tip; reviewer should rerun tests offline with source provenance and examine semantics, atomic replacement, concurrency, tests, and this dossier.
+- Independent provider review: **NOT YET DONE**. This child session has no delegation tool. An attempted read-only Claude CLI review failed: OAuth session expired and could not be refreshed; no review was produced. Parent must dispatch a separate no-edit provider reviewer against the committed tip; reviewer should rerun tests offline with source provenance and examine semantics, atomic replacement, concurrency, tests, and this dossier.
 - Base verification: local `beta` and fetched `origin/beta` both equal `c10866524a7fb30ac811fce8ef050fd5d8c922cc`; installed pin ancestor check succeeded. Existing local refs and task discovery did not identify matching batch reservation work; do not retire other branches.
 
 ## Blockers, gates, and resume
