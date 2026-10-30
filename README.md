@@ -17,6 +17,26 @@ Current canonical families are:
 
 Each lane keeps its own `reports/`, `ledgers/`, `working/`, `context/`, `notes/`, and `recon/` roots. Binary lanes also have `input/`. This keeps findings, generated artifacts, notes, and context isolated per target lane.
 
+## Batch identity reservation (opt-in)
+
+`VersionedFindingsLedger.reserve_batch(candidates)` accepts a list of at most
+1,000 finding dictionaries and returns ordered `(exists, fid, merged_finding)`
+results like `check()`. An empty list returns without a write. Existing identity
+matching takes precedence over an explicit FID; each new or earlier batch entry
+participates in subsequent matching and generated FID allocation. An invalid or
+conflicting FID raises `ValueError` before the ledger is replaced. Cooperating
+writers share the existing exclusive ledger lock; a nonempty successful call
+replaces the ledger once. `check()` and the single-item APIs are unchanged.
+
+This is **identity reservation atomicity only**. It does not provide fsync or
+crash durability, atomic packet/index/finalization writes, or a report-level
+transaction. In particular, a failure after reservation can leave incomplete
+findings, and retrying via duplicate detection can skip finalization. Consumers
+must not treat a duplicate result as proof of completed import. A durable
+per-report recovery/ownership and retry contract, including failure injection
+through the consumer entrypoint, is still required before claiming that report
+imports are safely recoverable.
+
 ## Report UX
 
 The evidence-only report UX centers on stable finding packets and populated navigation:
