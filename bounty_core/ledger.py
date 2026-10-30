@@ -697,38 +697,45 @@ def _reserve_candidate(
         root_override=root_override,
         storage_root=storage_root,
     ) as payload:
-        findings = payload.setdefault("findings", [])
-        if not isinstance(findings, list):
-            findings = []
-            payload["findings"] = findings
+        return _reserve_in_payload(payload, finding, snapshot_id, version_label, run_id, agent)
 
-        existing = _find_existing(findings, finding)
-        if existing is not None:
-            return False, str(existing.get("fid") or "").strip()
 
-        prefix = _fid_prefix_for(finding)
-        fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
-        _validate_packet_fid(fid)
-        if any(str(item.get("fid") or "") == fid for item in findings):
-            raise ValueError(f"finding FID already assigned: {fid}")
-        sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
-        entry = {
-            "fid": fid,
-            "type": str(finding.get("type") or finding.get("title") or "Unknown finding").strip(),
-            "class_name": _normalize_class_name(finding.get("class_name") or finding.get("vuln_class")),
-            "file": _normalize_relpath(finding.get("file")),
-            "line": _safe_int(finding.get("line")),
-            "severity": str(finding.get("severity") or "UNKNOWN").strip().upper(),
-            "first_seen": sighting["seen_at"],
-            "first_snapshot": snapshot_id,
-            "last_seen": sighting["seen_at"],
-            "last_snapshot": snapshot_id,
-            "sightings": [sighting],
-            "current": _current_from_sightings([sighting]),
-        }
-        _merge_extra_fields(entry, finding)
-        findings.append(entry)
-        return True, fid
+def _reserve_in_payload(
+    payload: dict[str, Any], finding: dict[str, Any], snapshot_id: str,
+    version_label: str, run_id: str, agent: str,
+) -> tuple[bool, str]:
+    findings = payload.setdefault("findings", [])
+    if not isinstance(findings, list):
+        findings = []
+        payload["findings"] = findings
+
+    existing = _find_existing(findings, finding)
+    if existing is not None:
+        return False, str(existing.get("fid") or "").strip()
+
+    prefix = _fid_prefix_for(finding)
+    fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
+    _validate_packet_fid(fid)
+    if any(str(item.get("fid") or "") == fid for item in findings):
+        raise ValueError(f"finding FID already assigned: {fid}")
+    sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
+    entry = {
+        "fid": fid,
+        "type": str(finding.get("type") or finding.get("title") or "Unknown finding").strip(),
+        "class_name": _normalize_class_name(finding.get("class_name") or finding.get("vuln_class")),
+        "file": _normalize_relpath(finding.get("file")),
+        "line": _safe_int(finding.get("line")),
+        "severity": str(finding.get("severity") or "UNKNOWN").strip().upper(),
+        "first_seen": sighting["seen_at"],
+        "first_snapshot": snapshot_id,
+        "last_seen": sighting["seen_at"],
+        "last_snapshot": snapshot_id,
+        "sightings": [sighting],
+        "current": _current_from_sightings([sighting]),
+    }
+    _merge_extra_fields(entry, finding)
+    findings.append(entry)
+    return True, fid
 
 
 def ledger_add(
@@ -1264,6 +1271,52 @@ class VersionedFindingsLedger:
             merged["version_label"] = self.version_label
             merged["run_id"] = str(merged.get("run_id") or self.run_id)
         return (not reserved), fid, merged
+
+    def reserve_batch(self, candidates: list[dict[str, Any]]) -> list[tuple[bool, str | None, dict[str, Any]]]:
+        """Reserve up to 1000 identities together, returning check-like results in order.
+
+        Candidates must be dictionaries (including dict subclasses); other
+        mappings and iterable pairs are not accepted. Conflicts and invalid
+        candidates raise before replacement. This protects reservations only:
+        packets, indexes, finalization and crash durability are separate.
+        """
+        if not isinstance(candidates, list) or len(candidates) > 1000:
+            raise ValueError("candidates must be a list of at most 1000 findings")
+        if not candidates:
+            return []
+        results = []
+        with _locked_payload(self.program, exclusive=True, lane=self.lane,
+                             family=self.family, root_override=self.root_override) as payload:
+            for index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    raise ValueError(f"candidate at index {index} must be a dictionary")
+                finding = dict(candidate)
+                findings = payload.get("findings", [])
+                findings = findings if isinstance(findings, list) else []
+                if finding.get("line") is not None or (finding.get("type") or finding.get("title")) is not None:
+                    existing = _find_existing(findings, finding)
+                else:
+                    target = (_normalize_relpath(finding.get("file")),
+                              _normalize_class_name(finding.get("class_name") or finding.get("vuln_class")))
+                    existing = next((item for item in findings if
+                                     (_normalize_relpath(item.get("file")),
+                                      _normalize_class_name(item.get("class_name"))) == target), None)
+                fid = str(existing.get("fid") or "").strip() if existing is not None else ""
+                if fid:
+                    merged = dict(finding)
+                    merged.update({"fid": fid, **(_normalize_entry(existing) or {})})
+                    results.append((True, fid, merged))
+                    continue
+                reserved, fid = _reserve_in_payload(
+                    payload, finding, self.snapshot_id, self.version_label,
+                    str(finding.get("run_id") or self.run_id), str(finding.get("agent") or self.agent),
+                )
+                merged = dict(finding)
+                if fid:
+                    merged.update(fid=fid, snapshot_id=self.snapshot_id,
+                                  version_label=self.version_label, run_id=str(merged.get("run_id") or self.run_id))
+                results.append((not reserved, fid, merged))
+        return results
 
     def update(self, finding_with_fid: dict[str, Any]) -> dict[str, Any]:
         _, fid = ledger_add(
