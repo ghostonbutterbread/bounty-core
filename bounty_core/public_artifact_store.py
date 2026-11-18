@@ -69,8 +69,6 @@ class PublicArtifactStore:
         supplied_artifact_id = _optional(artifact_id)
         if normalized_event != "created" and not supplied_artifact_id:
             raise ValueError("artifact_id is required for lifecycle events after creation")
-        latest = self._latest(supplied_artifact_id)
-        _validate_transition(normalized_event, normalized_visibility, latest)
         if normalized_event == "cleanup_verified" and not cleanup_verified:
             raise ValueError("cleanup_verified must be true for cleanup_verified events")
         if cleanup_verified and normalized_event not in {"deleted", "cleanup_verified"}:
@@ -101,6 +99,8 @@ class PublicArtifactStore:
         with self.events_path.open("a", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
+                latest = self._latest(supplied_artifact_id)
+                _validate_transition(normalized_event, normalized_visibility, latest)
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
