@@ -340,7 +340,7 @@ def _finding_key_for(entry: dict[str, Any]) -> tuple[str, int, str, str]:
         entry.get("file"),
         entry.get("line"),
         entry.get("class_name") or entry.get("vuln_class"),
-        entry.get("type") or entry.get("title"),
+        str(entry.get("type") or entry.get("title") or "Unknown finding").strip() or "Unknown finding",
     )
 
 
@@ -607,6 +607,16 @@ def migrate_ledger_payload(program: str, payload: dict[str, Any]) -> dict[str, A
     return migrated_payload
 
 
+def _reject_import_marker(data: dict[str, Any] | None) -> None:
+    if data is not None and "_atomic_import_pending" in data:
+        raise ValueError("pending import marker is managed by import_finding; retry without it")
+
+
+def _reject_pending_import(finding: dict[str, Any] | None) -> None:
+    if finding is not None and "_atomic_import_pending" in finding:
+        raise ValueError("pending import must be completed with import_finding using its original candidate and mode")
+
+
 def _find_existing(findings: list[dict[str, Any]], finding: dict[str, Any]) -> dict[str, Any] | None:
     target = _finding_key_for(finding)
     for finding in findings:
@@ -713,6 +723,7 @@ def _reserve_in_payload(
 
     existing = _find_existing(findings, finding)
     if existing is not None:
+        _reject_pending_import(existing)
         return False, str(existing.get("fid") or "").strip()
 
     prefix = _fid_prefix_for(finding)
@@ -756,6 +767,7 @@ def ledger_add(
 ) -> tuple[bool, str | None]:
     """Add or update a finding. Returns (is_new_fid, fid). Dedup is global across snapshots."""
     validate_packet_mode(packet_mode)
+    _reject_import_marker(finding)
     with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
         return _ledger_add_in_payload(payload, finding, snapshot_id, version_label, run_id, agent,
                                       program=program, family=family, lane=lane,
@@ -773,6 +785,7 @@ def _ledger_add_in_payload(payload, finding, snapshot_id, version_label, run_id,
     sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
 
     if existing is not None:
+        _reject_pending_import(existing)
         _merge_finding(existing, finding, snapshot_id=snapshot_id, sighting=sighting)
         return False, str(existing.get("fid") or "").strip()
 
@@ -846,6 +859,8 @@ def ledger_check(
             )
         if existing is None:
             return False, None
+
+        _reject_pending_import(existing)
 
         if snapshot_id:
             sightings = existing.get("sightings", [])
@@ -969,6 +984,7 @@ def patch_finding_by_fid(
 ) -> dict[str, Any] | None:
     """Patch one finding by FID without touching observation metadata by default."""
     validate_packet_mode(packet_mode)
+    _reject_import_marker(patch)
     target = str(fid or "").strip()
     if not target:
         raise ValueError("fid is required")
@@ -998,6 +1014,7 @@ def patch_finding_by_fid(
                 continue
             if str(finding.get("fid") or "").strip() != target:
                 continue
+            _reject_pending_import(finding)
             if layout is not None and (refresh or write_report or packet_mode == EVIDENCE_ONLY):
                 preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
             if layout is not None:
@@ -1251,6 +1268,7 @@ class VersionedFindingsLedger:
         )
 
     def check(self, finding_dict: dict[str, Any]) -> tuple[bool, str | None, dict[str, Any]]:
+        _reject_import_marker(finding_dict)
         exists, fid = ledger_check(
             self.program,
             _normalize_relpath(finding_dict.get("file")),
@@ -1296,13 +1314,16 @@ class VersionedFindingsLedger:
         """
         validate_packet_mode(packet_mode)
         incoming = dict(candidate)
+        _reject_import_marker(incoming)
+        detailed_identity = incoming.get("line") is not None or (incoming.get("type") or incoming.get("title")) is not None
+        incoming["type"] = str(incoming.get("type") or incoming.get("title") or "Unknown finding").strip() or "Unknown finding"
         with _locked_payload(self.program, exclusive=True, lane=self.lane, family=self.family,
                              root_override=self.root_override, auto_write=False) as payload:
             findings = payload.setdefault("findings", [])
             if not isinstance(findings, list):
                 findings = []
                 payload["findings"] = findings
-            if incoming.get("line") is not None or (incoming.get("type") or incoming.get("title")) is not None:
+            if detailed_identity:
                 existing = _find_existing(findings, incoming)
             else:
                 target = (_normalize_relpath(incoming.get("file")),
@@ -1313,7 +1334,7 @@ class VersionedFindingsLedger:
                     None,
                 )
             pending = existing.get("_atomic_import_pending") if existing is not None else None
-            if existing is not None and not pending:
+            if existing is not None and "_atomic_import_pending" not in existing:
                 merged = dict(incoming)
                 merged.update(_normalize_entry(existing) or {})
                 return True, str(existing.get("fid") or ""), merged
@@ -1381,6 +1402,7 @@ class VersionedFindingsLedger:
                 if not isinstance(candidate, dict):
                     raise ValueError(f"candidate at index {index} must be a dictionary")
                 finding = dict(candidate)
+                _reject_import_marker(finding)
                 findings = payload.get("findings", [])
                 findings = findings if isinstance(findings, list) else []
                 if finding.get("line") is not None or (finding.get("type") or finding.get("title")) is not None:
@@ -1393,6 +1415,7 @@ class VersionedFindingsLedger:
                                       _normalize_class_name(item.get("class_name"))) == target), None)
                 fid = str(existing.get("fid") or "").strip() if existing is not None else ""
                 if fid:
+                    _reject_pending_import(existing)
                     merged = dict(finding)
                     merged.update({"fid": fid, **(_normalize_entry(existing) or {})})
                     results.append((True, fid, merged))
@@ -1737,6 +1760,7 @@ def add_finding(
 ) -> dict[str, Any]:
     """Normalize and add/update one finding while using the Ledger V2 store."""
     validate_packet_mode(packet_mode)
+    _reject_import_marker(finding)
     if _is_source_style_finding(finding or {}):
         return _add_source_style_finding(
             finding,
@@ -1761,6 +1785,7 @@ def add_finding(
             payload["findings"] = findings
 
         existing = next((item for item in findings if item.get("identity") == normalized["identity"]), None)
+        _reject_pending_import(existing)
         targets = findings if refresh else ([existing] if existing is not None and (packet_mode == EVIDENCE_ONLY or write_report) else [])
         preflight_finding_packets(layout, targets, packet_mode=packet_mode)
         is_new = existing is None
@@ -1860,6 +1885,7 @@ def update_finding(
 ) -> dict[str, Any]:
     """Patch one finding while preserving immutable observation metadata."""
     validate_packet_mode(packet_mode)
+    _reject_import_marker(patch)
     root = _normalize_root_override(root_override, storage_root)
     layout = resolve_storage(program, family=family, lane=lane, root_override=root)
     protected = {"identity", "program", "family", "lane", "created_at", "first_seen", "first_snapshot", "sightings", "provenance", "fid", "report_dir"}
@@ -1874,6 +1900,8 @@ def update_finding(
         finding = next((item for item in findings if item.get("identity") == identity), None)
         if finding is None:
             return {"ok": False, "finding": {}, "layout": layout.to_dict()}
+
+        _reject_pending_import(finding)
 
         preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
         _validate_packet_pointer_patch(layout, finding, normalized_patch)
