@@ -178,6 +178,8 @@ def _packet_dir(reports_root: Path, finding: dict[str, Any]) -> Path:
         packet = Path(str(stored)).expanduser()
     else:
         packet = reports_root / fid
+    if packet == reports_root / "raw":
+        raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
     if (packet.parent != reports_root or
             not (packet.name == fid or re.fullmatch(re.escape(fid) + r"-[a-z0-9]+(?:-[a-z0-9]+)*", packet.name)) or
             packet.is_symlink() or packet.resolve(strict=False).parent != reports_root.resolve(strict=False)):
@@ -611,6 +613,7 @@ def _preserve_hand_edited_report(layout: StorageLayout, finding: dict[str, Any],
 
 def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create the stable, agent-facing container for a finding report."""
+    _validate_historical_packet_pointers(layout, finding)
     packet_dir = canonical_finding_report_dir(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
     if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
@@ -671,18 +674,50 @@ def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, An
         fid = _finding_fid(finding)
         old = layout.reports_root / fid
         if old.exists() or old.is_symlink():
-            finding["report_dir"] = str(old)
+            candidate = old
         else:
             slug = re.sub(r"[^a-z0-9]+", "-", _title_for(finding).lower()).strip("-")[:80].rstrip("-") or "finding"
             candidate = layout.reports_root / f"{fid}-{slug}"
             if candidate.exists() or candidate.is_symlink():
                 raise ValueError(f"finding packet already exists: {candidate}")
-            finding["report_dir"] = str(candidate)
+        canonical_finding_report_dir(layout, {**finding, "report_dir": str(candidate)})
+        finding["report_dir"] = str(candidate)
     return canonical_finding_report_dir(layout, finding)
+
+
+def _validate_historical_packet_pointers(layout: StorageLayout, finding: dict[str, Any]) -> None:
+    # Check both lexical normalization and actual symlink resolution: a missing
+    # alias/.. must still be caught, as must a symlink pointing into raw.
+    root = layout.reports_root.resolve(strict=False)
+    raw = root / "raw"
+    lexical_root = Path(os.path.abspath(layout.reports_root))
+    for key in ("report_dir", "report_path", "evidence_path"):
+        value = finding.get(key)
+        if not value:
+            continue
+        path = Path(str(value)).expanduser()
+        lexical = Path(os.path.abspath(path))
+        resolved = path.resolve(strict=False)
+        lexical_raw = lexical_root / "raw"
+        if lexical.is_relative_to(lexical_raw) or resolved.is_relative_to(raw):
+            raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
+        if (path.absolute().is_relative_to(lexical_root) or lexical.is_relative_to(lexical_root)) and not resolved.is_relative_to(root):
+            raise ValueError("historical packet pointer escapes reports_root")
+
+
+def preflight_finding_packets(layout: StorageLayout, findings: Iterable[dict[str, Any]], *, packet_mode: str) -> None:
+    """Validate packet targets without changing the findings or filesystem."""
+    for finding in findings:
+        _validate_historical_packet_pointers(layout, finding)
+        if packet_mode == EVIDENCE_ONLY:
+            reserve_finding_evidence_packet(layout, dict(finding))
+        else:
+            canonical_finding_report_dir(layout, finding)
 
 
 def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create only the packet directories and EVIDENCE.md; never touch report files."""
+    _validate_historical_packet_pointers(layout, finding)
     reserve_finding_evidence_packet(layout, finding)
     packet_dir = _ensure_finding_packet(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
@@ -1316,6 +1351,7 @@ def _cleanup_stale_legacy_indexes(
 
 def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]], *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     validate_packet_mode(packet_mode)
+    preflight_finding_packets(layout, findings, packet_mode=packet_mode)
     if packet_mode == EVIDENCE_ONLY:
         for finding in findings:
             ensure_finding_evidence_packet(layout, finding)
@@ -1386,6 +1422,7 @@ def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode:
     lock_kwargs = {"family": layout.family, "lane": layout.lane, "root_override": layout.base_root, "exclusive": True}
     with _locked_payload(layout.program, **lock_kwargs) as payload:
         rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
+        preflight_finding_packets(layout, rows, packet_mode=packet_mode)
         if packet_mode == EVIDENCE_ONLY:
             needs_reservation = any(not finding.get("report_dir") for finding in rows)
             for finding in rows:
