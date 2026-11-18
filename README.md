@@ -40,8 +40,10 @@ cleanup event against the old ID. Visibility changes use `visibility_changed`;
 `deleted` is also supported, retaining the last recorded visibility (including
 public), without asserting an invented private transition. An existing legacy
 public `cleanup_pending` can likewise advance to `deleted` with unchanged
-visibility. `cleanup_verified` requires a prior `deleted` and literal true
-`cleanup_verified`. Deletion alone is not verification. `current()` excludes pending and later states;
+visibility. A `cleanup_verified` event requires a prior `deleted` event and a
+literal true flag. A `deleted` event may itself carry that flag when the caller
+has verified deletion; a `deleted` event with the default false flag is not
+verified. `current()` excludes pending and later states;
 `include_cleaned=True` exposes their latest rows. These are caller-recorded
 claims, not independent proof of platform state.
 
