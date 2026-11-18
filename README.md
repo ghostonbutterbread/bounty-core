@@ -17,6 +17,38 @@ Current canonical families are:
 
 Each lane keeps its own `reports/`, `ledgers/`, `working/`, `context/`, `notes/`, and `recon/` roots. Binary lanes also have `input/`. This keeps findings, generated artifacts, notes, and context isolated per target lane.
 
+## Owned public-artifact registry
+
+`PublicArtifactStore` keeps ownership and cleanup pointers at
+`<lane>/public_artifacts/events.jsonl`; it is not a content archive or an
+authorization mechanism. Supply an absolute HTTP(S) canonical artifact URL
+without userinfo, query, or fragment. Nonempty `details` are rejected; the
+remaining text fields are short, non-secret labels, not requests, payloads, or
+private bodies. Labels and canonical paths can contain arbitrary-looking opaque
+values: validation cannot determine whether an unlabeled value or a path is a
+secret or a sensitive share link. The caller must ensure they are safe before
+calling; syntactic validation is not a privacy guarantee. Older events are not
+rewritten or sanitized by this change; audit existing stores separately.
+
+For one `artifact_id`, account reference, kind, canonical URL and any supplied
+object ID are bound to the original identity. An omitted known object ID is
+retained. A URL or account change needs a separately tracked artifact, not a
+cleanup event against the old ID. Visibility changes use `visibility_changed`;
+cleanup requires previously recorded private visibility, then
+`cleanup_pending` → `deleted` → `cleanup_verified`, with a literal true
+`cleanup_verified` on the last event. Thus direct deletion of a public post
+cannot currently be represented as completed cleanup: keep it unresolved rather
+than claim it was private. `current()` excludes pending and later states;
+`include_cleaned=True` exposes their latest rows. These are caller-recorded
+claims, not independent proof of platform state.
+
+Cooperating writers validate and append under one advisory file lock. Failed or
+short writes can leave a torn record; later writes fail closed until the history
+is reconciled. A failed fsync may leave a complete event despite the error; check
+the actual history before retrying. Discovery reads remain tolerant of damaged
+lines and must not be used as integrity proof. The lock does not coordinate
+writers that ignore it or independent synced replicas.
+
 ## Batch identity reservation (opt-in)
 
 `VersionedFindingsLedger.reserve_batch(candidates)` accepts a list of at most
