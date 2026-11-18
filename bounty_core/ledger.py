@@ -27,12 +27,13 @@ from .reports import (
     ensure_finding_evidence_packet,
     is_finding_packet_path,
     is_generated_safe_finding_report,
+    preflight_finding_packets,
     refresh_report_indexes,
     reserve_finding_evidence_packet,
     validate_packet_mode,
     write_finding_report,
 )
-from .storage import DEFAULT_LANES, VALID_FAMILIES, StorageLayout, normalize_family, normalize_lane, resolve_storage
+from .storage import DEFAULT_LANES, VALID_FAMILIES, StorageLayout, ensure_layout, normalize_family, normalize_lane, resolve_storage
 
 
 LEDGER_VERSION = 2
@@ -755,44 +756,51 @@ def ledger_add(
     """Add or update a finding. Returns (is_new_fid, fid). Dedup is global across snapshots."""
     validate_packet_mode(packet_mode)
     with _locked_payload(program, exclusive=True, lane=lane, family=family, root_override=root_override, storage_root=storage_root) as payload:
-        findings = payload.setdefault("findings", [])
-        if not isinstance(findings, list):
-            findings = []
-            payload["findings"] = findings
+        return _ledger_add_in_payload(payload, finding, snapshot_id, version_label, run_id, agent,
+                                      program=program, family=family, lane=lane,
+                                      root_override=root_override, storage_root=storage_root, packet_mode=packet_mode)
 
-        existing = _find_existing(findings, finding)
-        sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
 
-        if existing is not None:
-            _merge_finding(existing, finding, snapshot_id=snapshot_id, sighting=sighting)
-            return False, str(existing.get("fid") or "").strip()
+def _ledger_add_in_payload(payload, finding, snapshot_id, version_label, run_id, agent, *,
+                           program, family, lane, root_override, storage_root, packet_mode):
+    findings = payload.setdefault("findings", [])
+    if not isinstance(findings, list):
+        findings = []
+        payload["findings"] = findings
 
-        prefix = _fid_prefix_for(finding)
-        fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
-        _validate_packet_fid(fid)
-        if any(str(item.get("fid") or "") == fid for item in findings):
-            raise ValueError(f"finding FID already assigned: {fid}")
-        entry = {
-            "fid": fid,
-            "type": str(finding.get("type") or finding.get("title") or "Unknown finding").strip(),
-            "class_name": _normalize_class_name(finding.get("class_name") or finding.get("vuln_class")),
-            "file": _normalize_relpath(finding.get("file")),
-            "line": _safe_int(finding.get("line")),
-            "severity": str(finding.get("severity") or "UNKNOWN").strip().upper(),
-            "first_seen": sighting["seen_at"],
-            "first_snapshot": snapshot_id,
-            "last_seen": sighting["seen_at"],
-            "last_snapshot": snapshot_id,
-            "sightings": [sighting],
-            "current": _current_from_sightings([sighting]),
-        }
-        _merge_extra_fields(entry, finding)
-        if packet_mode == EVIDENCE_ONLY:
-            layout = resolve_storage(program, family=family, lane=lane,
-                                     root_override=_normalize_root_override(root_override, storage_root), create=True)
-            reserve_finding_evidence_packet(layout, entry)
-        findings.append(entry)
-        return True, fid
+    existing = _find_existing(findings, finding)
+    sighting = _make_sighting(finding, snapshot_id, version_label, run_id, agent)
+
+    if existing is not None:
+        _merge_finding(existing, finding, snapshot_id=snapshot_id, sighting=sighting)
+        return False, str(existing.get("fid") or "").strip()
+
+    prefix = _fid_prefix_for(finding)
+    fid = str(finding.get("fid") or "").strip() or _next_fid(findings, prefix)
+    _validate_packet_fid(fid)
+    if any(str(item.get("fid") or "") == fid for item in findings):
+        raise ValueError(f"finding FID already assigned: {fid}")
+    entry = {
+        "fid": fid,
+        "type": str(finding.get("type") or finding.get("title") or "Unknown finding").strip(),
+        "class_name": _normalize_class_name(finding.get("class_name") or finding.get("vuln_class")),
+        "file": _normalize_relpath(finding.get("file")),
+        "line": _safe_int(finding.get("line")),
+        "severity": str(finding.get("severity") or "UNKNOWN").strip().upper(),
+        "first_seen": sighting["seen_at"],
+        "first_snapshot": snapshot_id,
+        "last_seen": sighting["seen_at"],
+        "last_snapshot": snapshot_id,
+        "sightings": [sighting],
+        "current": _current_from_sightings([sighting]),
+    }
+    _merge_extra_fields(entry, finding)
+    if packet_mode == EVIDENCE_ONLY:
+        layout = resolve_storage(program, family=family, lane=lane,
+                                 root_override=_normalize_root_override(root_override, storage_root), create=True)
+        reserve_finding_evidence_packet(layout, entry)
+    findings.append(entry)
+    return True, fid
 
 
 def ledger_check(
@@ -966,7 +974,7 @@ def patch_finding_by_fid(
 
     root = _normalize_root_override(root_override, storage_root)
     layout = (
-        resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
+        resolve_storage(program, family=family, lane=lane, root_override=root)
         if write_report or refresh or packet_mode == EVIDENCE_ONLY or any(key in patch for key in ("report_path", "evidence_path"))
         else None
     )
@@ -989,6 +997,8 @@ def patch_finding_by_fid(
                 continue
             if str(finding.get("fid") or "").strip() != target:
                 continue
+            if layout is not None and (refresh or write_report or packet_mode == EVIDENCE_ONLY):
+                preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
             if layout is not None:
                 _validate_packet_pointer_patch(layout, finding, normalized_patch)
             old_report_path = Path(str(finding.get("report_path"))).expanduser() if finding.get("report_path") else None
@@ -1030,6 +1040,9 @@ def patch_finding_by_fid(
                         if status:
                             latest["status"] = status
                         finding["current"] = _current_from_sightings([item for item in sightings if isinstance(item, dict)])
+            if layout is not None and (refresh or write_report or packet_mode == EVIDENCE_ONLY):
+                preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
+                ensure_layout(layout)
             if packet_mode == EVIDENCE_ONLY and layout is not None:
                 ensure_finding_evidence_packet(layout, finding)
             elif write_report and layout is not None:
@@ -1578,32 +1591,32 @@ def _add_source_style_finding(
     entry.setdefault("created_at", str(entry.get("created_at") or utc_now()))
     entry["updated_at"] = str(entry.get("updated_at") or utc_now())
 
-    is_new, fid = ledger_add(
-        entry["program"],
-        entry,
-        str(entry.get("snapshot_id") or entry.get("first_snapshot") or "compat"),
-        str(entry.get("version_label") or ""),
-        str(entry.get("run_id") or "compat"),
-        str(entry.get("agent") or entry.get("source_tool") or "bounty-core"),
-        family=entry["family"],
-        lane=entry["lane"],
-        root_override=root,
-        packet_mode=packet_mode,
-    )
-    if not fid:
-        raise ValueError("ledger_add did not return a fid")
-
-    layout = resolve_storage(entry["program"], family=entry["family"], lane=entry["lane"], root_override=root, create=True)
-    old_report_path = None
+    layout = resolve_storage(entry["program"], family=entry["family"], lane=entry["lane"], root_override=root)
     with _locked_payload(layout.program, exclusive=True, lane=layout.lane, family=layout.family, root_override=root) as payload:
-        findings = payload.setdefault("findings", [])
-        if not isinstance(findings, list):
-            findings = []
-            payload["findings"] = findings
-        stored = next((item for item in findings if str(item.get("fid") or "") == str(fid)), None)
-        if stored is None:
-            return {"is_new": is_new, "finding": {}, "layout": layout.to_dict()}
-
+        previous = payload.get("findings", [])
+        previous = previous if isinstance(previous, list) else []
+        existing = _find_existing(previous, entry)
+        targets = previous if refresh else ([existing] if existing is not None and (packet_mode == EVIDENCE_ONLY or write_report) else [])
+        preflight_finding_packets(layout, targets, packet_mode=packet_mode)
+        # Prepare the actual merged row in memory, then validate the full refresh
+        # set before committing the ledger or creating packets and events.
+        is_new, fid = _ledger_add_in_payload(
+            payload, entry, str(entry.get("snapshot_id") or entry.get("first_snapshot") or "compat"),
+            str(entry.get("version_label") or ""), str(entry.get("run_id") or "compat"),
+            str(entry.get("agent") or entry.get("source_tool") or "bounty-core"),
+            program=layout.program, family=layout.family, lane=layout.lane,
+            root_override=root, storage_root=None, packet_mode=LEGACY_PACKET)
+        findings = payload["findings"]
+        stored = next(item for item in findings if str(item.get("fid") or "") == str(fid))
+        targets = findings if refresh else ([stored] if packet_mode == EVIDENCE_ONLY or write_report else [])
+        preflight_finding_packets(layout, targets, packet_mode=packet_mode)
+        if packet_mode == EVIDENCE_ONLY:
+            reserve_finding_evidence_packet(layout, stored)
+        ensure_layout(layout)
+        # Keep the original reservation-before-packet durability guarantee while
+        # retaining the same lock across validation, commit and materialization.
+        payload["updated_at"] = _timestamp_iso()
+        _write_json_atomic(_layout_ledger_path(layout), payload)
         old_report_path = Path(str(stored.get("report_path"))).expanduser() if stored.get("report_path") else None
         stored.setdefault("identity", _core_identity(entry["program"], entry["family"], entry["lane"], fid))
         stored.setdefault("harness_fid", fid)
@@ -1662,7 +1675,7 @@ def add_finding(
 
     root = _normalize_root_override(root_override, storage_root)
     normalized = normalize_finding(finding, program=program or finding.get("program") or "ghost", family=family, lane=lane)
-    layout = resolve_storage(normalized["program"], family=normalized["family"], lane=normalized["lane"], root_override=root, create=True)
+    layout = resolve_storage(normalized["program"], family=normalized["family"], lane=normalized["lane"], root_override=root)
 
     with _locked_payload(layout.program, exclusive=True, lane=layout.lane, family=layout.family, root_override=root) as payload:
         findings = payload.setdefault("findings", [])
@@ -1671,6 +1684,8 @@ def add_finding(
             payload["findings"] = findings
 
         existing = next((item for item in findings if item.get("identity") == normalized["identity"]), None)
+        targets = findings if refresh else ([existing] if existing is not None and (packet_mode == EVIDENCE_ONLY or write_report) else [])
+        preflight_finding_packets(layout, targets, packet_mode=packet_mode)
         is_new = existing is None
         old_report_path = None
         now = str(normalized.get("updated_at") or utc_now())
@@ -1689,9 +1704,19 @@ def add_finding(
             existing["current"] = _current_from_sightings([item for item in existing.get("sightings", []) if isinstance(item, dict)])
             stored = existing
 
+        targets = findings if refresh else ([stored] if packet_mode == EVIDENCE_ONLY or write_report else [])
+        preflight_finding_packets(layout, targets, packet_mode=packet_mode)
         if packet_mode == EVIDENCE_ONLY:
             reserve_finding_evidence_packet(layout, stored)
+            ensure_layout(layout)
+            payload["updated_at"] = _timestamp_iso()
+            _write_json_atomic(_layout_ledger_path(layout), payload)
+            ensure_finding_evidence_packet(layout, stored)
+            if refresh:
+                refresh_indexes(layout, findings)
+                refresh_report_indexes(layout, findings, packet_mode=packet_mode)
         else:
+            ensure_layout(layout)
             _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
             if write_report:
                 report_path = write_finding_report(layout, stored)
@@ -1702,15 +1727,6 @@ def add_finding(
                 refresh_report_indexes(layout, findings, packet_mode=packet_mode)
 
     if packet_mode == EVIDENCE_ONLY:
-        # Commit the immutable packet reservation first. A failed ledger write
-        # leaves no orphan, and a failed packet write can reuse its ledger path.
-        with _locked_payload(layout.program, exclusive=True, lane=layout.lane, family=layout.family, root_override=root) as payload:
-            findings = payload["findings"]
-            stored = next(item for item in findings if item.get("identity") == normalized["identity"])
-            ensure_finding_evidence_packet(layout, stored)
-            if refresh:
-                refresh_indexes(layout, findings)
-                refresh_report_indexes(layout, findings, packet_mode=packet_mode)
         _append_jsonl_event(_findings_jsonl_path(layout), {"event": "finding_seen", "is_new": is_new, "finding": normalized})
 
     return {"is_new": is_new, "finding": stored, "layout": layout.to_dict()}
@@ -1768,7 +1784,7 @@ def update_finding(
     """Patch one finding while preserving immutable observation metadata."""
     validate_packet_mode(packet_mode)
     root = _normalize_root_override(root_override, storage_root)
-    layout = resolve_storage(program, family=family, lane=lane, root_override=root, create=True)
+    layout = resolve_storage(program, family=family, lane=lane, root_override=root)
     protected = {"identity", "program", "family", "lane", "created_at", "first_seen", "first_snapshot", "sightings", "provenance", "fid", "report_dir"}
     normalized_patch = {key: value for key, value in _normalize_patch(patch).items() if key not in protected}
     now = utc_now()
@@ -1782,11 +1798,15 @@ def update_finding(
         if finding is None:
             return {"ok": False, "finding": {}, "layout": layout.to_dict()}
 
+        preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
         _validate_packet_pointer_patch(layout, finding, normalized_patch)
         before = {key: finding.get(key) for key in normalized_patch}
         old_report_path = Path(str(finding.get("report_path"))).expanduser() if finding.get("report_path") else None
         finding.update(normalized_patch)
         finding["updated_at"] = now
+
+        preflight_finding_packets(layout, findings if refresh else [finding], packet_mode=packet_mode)
+        ensure_layout(layout)
 
         if packet_mode == EVIDENCE_ONLY:
             ensure_finding_evidence_packet(layout, finding)

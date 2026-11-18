@@ -684,6 +684,22 @@ def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, An
     return canonical_finding_report_dir(layout, finding)
 
 
+def preflight_finding_packets(layout: StorageLayout, findings: Iterable[dict[str, Any]], *, packet_mode: str) -> None:
+    """Validate packet targets without changing the findings or filesystem."""
+    for finding in findings:
+        # Historical pointers into raw are ambiguous even if report_dir is absent.
+        for key in ("report_dir", "report_path", "evidence_path"):
+            value = finding.get(key)
+            if value:
+                path = Path(str(value)).expanduser()
+                if path == layout.reports_root / "raw" or (layout.reports_root / "raw") in path.parents:
+                    raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
+        if packet_mode == EVIDENCE_ONLY:
+            reserve_finding_evidence_packet(layout, dict(finding))
+        else:
+            canonical_finding_report_dir(layout, finding)
+
+
 def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create only the packet directories and EVIDENCE.md; never touch report files."""
     reserve_finding_evidence_packet(layout, finding)
@@ -1319,6 +1335,7 @@ def _cleanup_stale_legacy_indexes(
 
 def refresh_report_indexes(layout: StorageLayout, findings: list[dict[str, Any]], *, packet_mode: str = LEGACY_PACKET) -> dict[str, Path]:
     validate_packet_mode(packet_mode)
+    preflight_finding_packets(layout, findings, packet_mode=packet_mode)
     if packet_mode == EVIDENCE_ONLY:
         for finding in findings:
             ensure_finding_evidence_packet(layout, finding)
@@ -1389,6 +1406,7 @@ def refresh_report_navigation_from_ledger(layout: StorageLayout, *, packet_mode:
     lock_kwargs = {"family": layout.family, "lane": layout.lane, "root_override": layout.base_root, "exclusive": True}
     with _locked_payload(layout.program, **lock_kwargs) as payload:
         rows = [item for item in payload.get("findings", []) if isinstance(item, dict)]
+        preflight_finding_packets(layout, rows, packet_mode=packet_mode)
         if packet_mode == EVIDENCE_ONLY:
             needs_reservation = any(not finding.get("report_dir") for finding in rows)
             for finding in rows:
