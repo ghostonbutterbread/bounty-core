@@ -673,13 +673,14 @@ def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, An
         fid = _finding_fid(finding)
         old = layout.reports_root / fid
         if old.exists() or old.is_symlink():
-            finding["report_dir"] = str(old)
+            candidate = old
         else:
             slug = re.sub(r"[^a-z0-9]+", "-", _title_for(finding).lower()).strip("-")[:80].rstrip("-") or "finding"
             candidate = layout.reports_root / f"{fid}-{slug}"
             if candidate.exists() or candidate.is_symlink():
                 raise ValueError(f"finding packet already exists: {candidate}")
-            finding["report_dir"] = str(candidate)
+        canonical_finding_report_dir(layout, {**finding, "report_dir": str(candidate)})
+        finding["report_dir"] = str(candidate)
     return canonical_finding_report_dir(layout, finding)
 
 

@@ -57,8 +57,10 @@ def test_direct_writer_rejects_raw_packet(tmp_path, writer):
     raw.mkdir(parents=True)
     (raw / 'REPORT.md').write_text('raw input')
     before = snapshot(tmp_path)
+    finding = {'fid': 'raw', 'title': 'Bug'}
     with pytest.raises(ValueError, match='raw|collision'):
-        writer(layout(tmp_path), {'fid': 'raw', 'title': 'Bug'})
+        writer(layout(tmp_path), finding)
+    assert finding == {'fid': 'raw', 'title': 'Bug'}
     assert snapshot(tmp_path) == before
 
 
