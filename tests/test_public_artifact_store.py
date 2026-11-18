@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import multiprocessing
+from typing import Any
 
 import pytest
 
@@ -20,6 +23,136 @@ def create(store: PublicArtifactStore) -> dict:
         cleanup_method="delete",
         details={"authorization": "Bearer do-not-store"},
     )
+
+
+def _record_after_lock_gate(root, kwargs, ready, release, results):
+    """Pause this writer immediately before it attempts the real flock."""
+    import fcntl
+
+    real_flock = fcntl.flock
+
+    def gated_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            ready.set()
+            if not release.wait(15):
+                raise RuntimeError("parent did not release lock gate")
+        return real_flock(fd, operation)
+
+    fcntl.flock = gated_flock
+    try:
+        store = PublicArtifactStore("community-signal", root_override=root)
+        try:
+            store.record(**kwargs)
+        except ValueError as exc:
+            results.send(("rejected", str(exc)))
+        except Exception as exc:
+            results.send(("error", repr(exc)))
+        else:
+            results.send(("appended", ""))
+    finally:
+        fcntl.flock = real_flock
+        results.close()
+
+
+def _record_paused_after_read(root, kwargs, ready, release, results):
+    store = PublicArtifactStore("community-signal", root_override=root)
+    original_latest = store._latest
+
+    def paused_latest(artifact_id):
+        latest = original_latest(artifact_id)
+        ready.set()
+        if not release.wait(15):
+            raise RuntimeError("parent did not release read gate")
+        return latest
+
+    store._latest = paused_latest
+    try:
+        results.send(store.record(**kwargs)["event"])
+    finally:
+        results.close()
+
+
+def test_latest_read_holds_interprocess_append_lock(tmp_path):
+    store = PublicArtifactStore("community-signal", root_override=tmp_path)
+    created = create(store)
+    kwargs: dict[str, Any] = dict(
+        event="updated", producer="public-artifacts", artifact_id=created["artifact_id"],
+        account_ref=created["account_ref"], artifact_kind=created["artifact_kind"],
+        url=created["url"], visibility="private",
+    )
+    ctx = multiprocessing.get_context("spawn")
+    ready, release = ctx.Event(), ctx.Event()
+    receive, send = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_record_paused_after_read, args=(tmp_path, kwargs, ready, release, send))
+    process.start()
+    send.close()
+    try:
+        assert ready.wait(15), "writer never read the latest state"
+        with store.events_path.open("a", encoding="utf-8") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        release.set()
+        assert receive.poll(15), "writer did not finish"
+        assert receive.recv() == "updated"
+        process.join(15)
+        assert process.exitcode == 0
+        store.record(**{**kwargs, "event": "cleanup_pending"})
+        assert [row["event"] for row in store.query()] == ["created", "updated", "cleanup_pending"]
+        assert store.current() == []
+    finally:
+        release.set()
+        process.join(15)
+        if process.is_alive():
+            process.terminate()
+            process.join(15)
+        receive.close()
+
+
+@pytest.mark.parametrize("scenario", ["cleanup_before_update", "duplicate_creation"])
+def test_competing_process_revalidates_after_prior_commit(tmp_path, scenario):
+    store = PublicArtifactStore("community-signal", root_override=tmp_path)
+    kwargs: dict[str, Any] = dict(
+        producer="public-artifacts", artifact_id="PA-controlled", account_ref="owner",
+        artifact_kind="post", url="https://example.test/post/1", visibility="private",
+    )
+    if scenario == "cleanup_before_update":
+        store.record(event="created", **kwargs)
+        competing_event, prior_event, rejection = "updated", "cleanup_pending", "cleanup_pending"
+        expected_events = ["created", "cleanup_pending"]
+    else:
+        competing_event, prior_event, rejection = "created", "created", "existing artifact_id"
+        expected_events = ["created"]
+
+    ctx = multiprocessing.get_context("spawn")
+    ready, release = ctx.Event(), ctx.Event()
+    receive, send = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=_record_after_lock_gate,
+        args=(tmp_path, {**kwargs, "event": competing_event}, ready, release, send),
+    )
+    process.start()
+    send.close()
+    try:
+        # On the unfixed implementation validation has read stale state here.
+        assert ready.wait(15), "writer never reached the lock boundary"
+        store.record(event=prior_event, **kwargs)
+        release.set()
+        assert receive.poll(15), "writer did not finish"
+        outcome, detail = receive.recv()
+        process.join(15)
+        assert process.exitcode == 0
+        assert outcome == "rejected", (outcome, detail)
+        assert rejection in detail
+        assert [row["event"] for row in store.query()] == expected_events
+        if scenario == "cleanup_before_update":
+            assert store.current() == []
+    finally:
+        release.set()
+        process.join(15)
+        if process.is_alive():
+            process.terminate()
+            process.join(15)
+        receive.close()
 
 
 def test_record_tracks_non_secret_account_and_artifact_url_in_lane_scoped_store(tmp_path):
