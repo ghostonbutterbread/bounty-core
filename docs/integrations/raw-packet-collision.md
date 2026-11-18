@@ -1,12 +1,13 @@
 # Raw packet collision integration dossier
 
-- **Status:** Core atomic import candidate implemented; local suite passes. BLOCKED from integration/publication pending independent review and BBH implementation, immutable pin/install, and combined release verification.
+- **Status:** Independent-review blockers corrected and locally tested; BLOCKED from integration/publication pending the same reviewer's re-review, BBH implementation, immutable pin/install, and combined release verification.
 - **Owner:** delegated Core implementer; parent owns review and integration.
 - **Branch / worktree:** `fix/core-raw-collision-minimal` / `/home/ryushe/worktrees/core-raw-collision-minimal`.
 - **Base / intended target:** fetched `origin/beta` `6142defb3de7cef44887c1685e4f670072585785` / `beta`.
 - **Prior checkpoints:** `e35033c6ce59aaec171a922edfa180c19924f82c`, `d510bca6d3aa0c1cf925ad2fb331fe14068712c7`, and regression checkpoint `51c181f598a2a8046c67a6a74b117336ed10f296`.
 - **Implementation/test checkpoints:** original `33b68293b9c31af6ac7082378bd96ee9cc2c3354`; review corrections `e394424b7208198bd40815c4c7779af5617a70b6`. Branch tip includes the subsequent dossier-only handoff.
 - **Atomic-import implementation checkpoint:** `f5185210ebbf5f16181b0f2e5e304786fa436456`; the branch tip also contains a later dossier-only handoff commit. Parent should review the full `origin/beta..fix/core-raw-collision-minimal` range and then coordinate the BBH adoption described below.
+- **Review-blocker correction checkpoint:** `3d06af85f3a51f44a6f13308f56ab0209fbbafc2`; the current branch tip contains a subsequent dossier-only handoff. No propagation, push, beta merge, or runtime activation has been authorized here. Parent: request the **same independent reviewer** to re-review the corrections and affected tests, then independently review any combined BBH release.
 - **Prior test-only recovery checkpoint:** `f45c96adaa5d94c0eb096e909640bcaff684a761`; the old split-call probe remains recoverable in history and is superseded by the candidate described below.
 - **Inspiration:** previous broader candidate on `fix/promo-fid-reserved-namespace`; not merged or modified here.
 
@@ -19,8 +20,15 @@ row, reserves the identity, creates the packet and refreshes indexes. Existing
 complete duplicates are unchanged. A new row is persisted with
 `_atomic_import_pending` before packet/index I/O; an exception propagates and a
 same-identity/same-mode call resumes that persisted row, returning nonduplicate
-on completion. Other modes are rejected while pending. It does not alter the
-existing `check`, `update`, `ledger_add`, or `reserve_batch` contracts.
+on completion. Other modes are rejected while pending. Type/title fallback is
+normalized to the stored `Unknown finding` identity before lookup, reservation,
+and retry. The shared identity key uses this same fallback for missing types.
+While a row is pending, `check`, `ledger_check`, `reserve_batch`, `ledger_add`,
+both add styles, and FID/identity updates reject matching rows with an explicit
+retry error instead of editing or presenting the row as a completed duplicate.
+Callers cannot supply the internal pending marker. Ordinary completed updates
+and unchanged duplicate semantics remain supported. A corrupt marker, including
+`None`, is not treated as completion; it requires operator reconciliation.
 
 BBH's intended change is to replace the check and `update_team_finding` pair
 with this **single** operation, preserving the current ValueError/duplicate
@@ -38,15 +46,27 @@ Focused provider tests cover both packet modes, raw collision/retry, FID
 conflicts, interrupted refresh and final ledger-write failure, mode mismatch,
 and a pair of spawned-process lock interleavings (competitor wins before lock;
 competitor observes contention through materialization and wins afterward).
-Full suite: **294 passed**, no skips/xfails, on the isolated source worktree,
-disposable HOME/XDG/TMPDIR, socket-connect fence, and BBH git archive. Command:
-`BBH_TEST_REPO=/home/ryushe/worktrees/bbh-beta-fetcher-family-integration PYTHONPATH=$PWD:/home/ryushe/.hermes/cache/scratch/core-raw-fix.XGnLbNk2/site PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/python3 -m pytest -q -p no:cacheprovider --basetemp=<disposable> tests`.
+At correction checkpoint the full unfiltered suite yielded **332 passed** in
+20.90s, no skips/xfails, on this source worktree with disposable HOME/XDG/TMPDIR,
+socket-connect fence, and the explicitly archived BBH revision above. The Core
+module path and blocked socket connect were verified. Command, with the named
+environment set to `/home/ryushe/.hermes/cache/scratch/core-atomic-repair/{home,xdg-config,xdg-cache,tmp}`:
+`BBH_TEST_REPO=/home/ryushe/worktrees/bbh-beta-fetcher-family-integration PYTHONPATH=$PWD:/home/ryushe/.hermes/cache/scratch/core-atomic-repair/site PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/python3 -m pytest -q -p no:cacheprovider --basetemp=/home/ryushe/.hermes/cache/scratch/core-atomic-repair/tmp/full-final tests`.
+Focused red/green tests reproduced missing-type D02 and pending mutation/false
+duplicates before correction, then passed. They cover recovery after failure in
+both packet modes, pending-marker injection, corrupt markers, edits to identity
+fields, normal completed edits, and byte-identical duplicate behavior. The
+independent reviewer's existing crash/concurrency probe (first 53 lines only;
+the old mutation probes intentionally expected unsafe success) passed four
+process exits and four simultaneous imports: one new D01, three duplicates.
+All fixtures and archives are synthetic; no production data was used.
 
 Boundaries: the lock coordinates only cooperating ledger writers; generated
 files and ledger are not a single transactional commit and no fsync or sudden
 power-loss guarantee is provided. Failures may leave partial output alongside a
-pending row. Other APIs/old BBH can mistake the pending row for a duplicate;
-pre-existing unmarked partial reservations cannot be auto-recovered. A newly
+pending row. Supported Core check and mutation APIs now explicitly refuse a
+matching pending row; old BBH still uses the unsafe split-call protocol until
+it adopts atomic import. Pre-existing unmarked partial reservations cannot be auto-recovered. A newly
 introduced raw row after an interrupted operation prevents retry until manually
 resolved. The operation has no migration and does not guarantee ownership
 against noncooperating filesystem edits. Independent complete-diff review is
