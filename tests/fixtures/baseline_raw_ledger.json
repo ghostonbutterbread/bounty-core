@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "program": "acme",
+  "updated_at": "2026-11-18T01:51:17Z",
+  "findings": [
+    {
+      "fid": "raw",
+      "type": "xss",
+      "class_name": "xss",
+      "file": "old.js",
+      "line": 3,
+      "severity": "UNKNOWN",
+      "first_seen": "2026-11-18T01:51:17Z",
+      "first_snapshot": "baseline-snapshot",
+      "last_seen": "2026-11-18T01:51:17Z",
+      "last_snapshot": "baseline-snapshot",
+      "sightings": [
+        {
+          "snapshot_id": "baseline-snapshot",
+          "version_label": "v1",
+          "run_id": "run1",
+          "seen_at": "2026-11-18T01:51:17Z",
+          "status": "active",
+          "review_tier": "PENDING_REVIEW",
+          "agent": "agent"
+        }
+      ],
+      "current": {
+        "review_tier": "PENDING_REVIEW",
+        "status": "active",
+        "version_label": "v1"
+      }
+    }
+  ]
+}

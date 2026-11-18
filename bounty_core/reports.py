@@ -178,6 +178,8 @@ def _packet_dir(reports_root: Path, finding: dict[str, Any]) -> Path:
         packet = Path(str(stored)).expanduser()
     else:
         packet = reports_root / fid
+    if packet == reports_root / "raw":
+        raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
     if (packet.parent != reports_root or
             not (packet.name == fid or re.fullmatch(re.escape(fid) + r"-[a-z0-9]+(?:-[a-z0-9]+)*", packet.name)) or
             packet.is_symlink() or packet.resolve(strict=False).parent != reports_root.resolve(strict=False)):
