@@ -322,7 +322,7 @@ def _safe_text(value: str | None, name: str, *, required: bool = False) -> str |
     if text is None:
         return None
     # These are short ownership labels, not a content or request archive.
-    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'-]+", text)
+    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'():;!&-]+", text)
             or redact_event_value(text) != text
             or re.search(r"\b(?:password|secret|token|authorization|cookie|bearer)\b", text, re.I)):
         raise ValueError(f"{name} must be a non-secret short label")

@@ -24,10 +24,13 @@ Each lane keeps its own `reports/`, `ledgers/`, `working/`, `context/`, `notes/`
 authorization mechanism. Supply an absolute HTTP(S) canonical artifact URL
 without userinfo, query, or fragment. Nonempty `details` are rejected; the
 remaining text fields are short, non-secret labels, not requests, payloads, or
-private bodies. Labels and canonical paths can contain arbitrary-looking opaque
-values: validation cannot determine whether an unlabeled value or a path is a
-secret or a sensitive share link. The caller must ensure they are safe before
-calling; syntactic validation is not a privacy guarantee. Older events are not
+private bodies. Ordinary prose punctuation, including a colon and a non-secret
+canonical URL, is accepted in labels; query/fragment delimiters, equals signs,
+markup and embedded control characters remain rejected. Labels and canonical
+paths can contain arbitrary-looking opaque values: validation cannot determine
+whether an unlabeled value or a path is a secret or a sensitive share link.
+The caller must ensure they are safe before calling; syntactic validation is not
+a privacy guarantee. Older events are not
 rewritten or sanitized by this change; audit existing stores separately. URLs
 that the redactor would change are rejected rather than persisted under a
 different identity.

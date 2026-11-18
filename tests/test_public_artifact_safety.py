@@ -1,7 +1,10 @@
 """Regressions at the public-artifact persistence boundary."""
+import json
 import multiprocessing
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -161,6 +164,49 @@ def test_rejects_obvious_sensitive_or_content_fields_without_echo(tmp_path, fiel
         store.record(**args(**{field: value}))
     assert value not in str(exc.value)
     assert not store.events_path.exists()
+
+
+@pytest.mark.parametrize("purpose", [
+    "Test rendering: display name",
+    "Compare renders (desktop & mobile): pass!",
+    "Compare https://example.test/posts/42: display name",
+])
+def test_accepts_non_secret_purpose_prose_and_urls(tmp_path, purpose):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    created = store.record(**args(purpose=purpose))
+    assert created["purpose"] == purpose
+    assert store.current() == [created]
+
+
+@pytest.mark.parametrize("purpose", [
+    "Authorization: Bearer actual-value",
+    "password: actual-value",
+    "https://user:actual-value@example.test/posts/42",
+    "https://example.test/posts/42?share=actual-value",
+])
+def test_rejects_credentials_and_sensitive_share_link_in_prose(tmp_path, purpose):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    with pytest.raises(ValueError) as exc:
+        store.record(**args(purpose=purpose))
+    assert "actual-value" not in str(exc.value)
+    assert not store.events_path.exists()
+
+
+def test_published_bbh_cli_accepts_original_purpose(tmp_path):
+    cli = os.environ.get("BBH_PUBLIC_ARTIFACT_CLI")
+    if not cli:
+        pytest.skip("set BBH_PUBLIC_ARTIFACT_CLI to the published BBH CLI source")
+    assert cli is not None
+    result = subprocess.run(
+        [sys.executable, cli, "--root", str(tmp_path), "record", "--program", "program",
+         "--event", "created", "--account-ref", "owner", "--artifact-kind", "post",
+         "--url", "https://example.test/posts/42", "--visibility", "public",
+         "--purpose", "Test rendering: display name"],
+        capture_output=True, text=True, env=os.environ.copy(), check=True,
+    )
+    event = json.loads(result.stdout)
+    assert event["purpose"] == "Test rendering: display name"
+    assert PublicArtifactStore("program", root_override=tmp_path).current() == [event]
 
 
 @pytest.mark.parametrize("field,value", [

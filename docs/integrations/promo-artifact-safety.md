@@ -1,6 +1,6 @@
 # Public-artifact privacy and cleanup integration dossier
 
-- **Status:** review blockers addressed; corrections require independent review
+- **Status:** safety review accepted; benign label compatibility correction requires independent re-review
 - **Owner:** delegated Core artifact-safety worker
 - **Owning feature branch/ref:** `fix/promo-artifact-safety` in the separate clone `/home/ryushe/worktrees/bounty-core-promo-artifact-safety`
 - **Base commit:** `6142defb3de7cef44887c1685e4f670072585785` (fetched `origin/beta`)
@@ -22,6 +22,7 @@ Reject credentialed, query-bearing, fragment-bearing, redactor-altered or malfor
 - `git diff --check` passed before implementation commit. Parent/independent reviewer must assess the exact commit range and behavioral compatibility; no independent acceptance is claimed.
 - Corrections add real baseline-generated fixtures from `6142def` for public pending/deletion and query-bearing histories, including a synthetic retained query secret. They cover explicit identity confirmation, noncopying of the unsafe URL, refusal to rebind a canonical URL, public direct deletion, legacy pending progression, and literal verification. Candidate regressions were observed failing first. A source-level published BBH `origin/beta` CLI test at `1f881dc78c0bc472bfc40b550aa5e057db6223a3` passed all 3 existing tests; a separate actual CLI exercise successfully updated after Core URL recovery and confirmed CLI direct public deletion remains blocked.
 - Final isolated Core suite after corrections: **283 passed**, `env -i` with disposable HOME/XDG/TMPDIR and checkout-first PYTHONPATH, `/home/ryushe/projects/bug_bounty_harness/.venv/bin/python -m pytest -q -p no:cacheprovider tests`. Published BBH-source CLI regression rerun after final code: **3 passed**, using the same isolated interpreter and explicit Core source. This is not an installed/pinned consumer test.
+- Compatibility correction: the exact BBH `--purpose 'Test rendering: display name'` and two representative benign prose/URL values failed first, then passed after allowing colon, parentheses, semicolon, exclamation, and ampersand in short labels. Credential-bearing URLs, credential syntax, markup, and query/share links remain rejected. No identity, cleanup, or historic data was changed. Focused Core tests **61 passed** and isolated complete Core suite **291 passed**, including the real BBH CLI subprocess from published BBH `4ba241ce9859e7ee4964566e54976aeb032336fd`; the BBH CLI's own tests **3 passed** against the candidate source. The Core CLI regression skips unless `BBH_PUBLIC_ARTIFACT_CLI` is set; set it to the published `agents/public_artifacts.py` archive and use checkout-first `PYTHONPATH` to exercise it. This does not establish an installed/pinned BBH integration.
 
 ## Blockers, caveats and deferred work
 
