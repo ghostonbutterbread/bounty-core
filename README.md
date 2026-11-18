@@ -17,6 +17,60 @@ Current canonical families are:
 
 Each lane keeps its own `reports/`, `ledgers/`, `working/`, `context/`, `notes/`, and `recon/` roots. Binary lanes also have `input/`. This keeps findings, generated artifacts, notes, and context isolated per target lane.
 
+## Owned public-artifact registry
+
+`PublicArtifactStore` keeps ownership and cleanup pointers at
+`<lane>/public_artifacts/events.jsonl`; it is not a content archive or an
+authorization mechanism. Supply an absolute HTTP(S) canonical artifact URL
+without userinfo, query, or fragment. Nonempty `details` are rejected; the
+remaining text fields are short, non-secret labels, not requests, payloads, or
+private bodies. Labels accept ordinary prose punctuation and non-secret URLs,
+including benign query strings and fragments. Recognizable credential assignments,
+some credential-bearing URLs, markup and embedded control characters are rejected.
+Labels and canonical paths can contain opaque values: validation cannot determine
+whether an unlabeled value or a path is a secret or a sensitive share link.
+The caller must ensure they are safe before calling; syntactic validation is not
+a privacy guarantee. Older events are not
+rewritten or sanitized by this change; audit existing stores separately. URLs
+that the redactor would change are rejected rather than persisted under a
+different identity.
+
+For one `artifact_id`, account reference, kind, canonical URL and any supplied
+object ID are bound to the original identity. An omitted known object ID is
+retained. A URL or account change needs a separately tracked artifact, not a
+cleanup event against the old ID. Visibility changes use `visibility_changed`;
+`cleanup_pending` requires previously recorded private visibility. Direct
+`deleted` is also supported, retaining the last recorded visibility (including
+public), without asserting an invented private transition. An existing legacy
+public `cleanup_pending` can likewise advance to `deleted` with unchanged
+visibility. A `cleanup_verified` event requires a prior `deleted` event and a
+literal true flag. A `deleted` event may itself carry that flag when the caller
+has verified deletion; a `deleted` event with the default false flag is not
+verified. `current()` excludes pending and later states;
+`include_cleaned=True` exposes their latest rows. These are caller-recorded
+claims, not independent proof of platform state.
+
+For a historical URL that cannot pass the new canonical rules, explicitly call
+`recover_legacy_url(artifact_id=..., previous_url=..., canonical_url=...,
+producer=..., identity_confirmed=True)` only after independently establishing
+that the safe replacement identifies the same owned object. The exact latest
+stored URL is compared under the write lock but is not copied into the recovery
+row. The event preserves lifecycle state and links to the previous event ID;
+subsequent writes use the replacement URL. This is an operator attestation, not
+automatic identity proof: query strings can carry essential identity, so do not
+simply strip them. If no safe replacement can be verified, leave the history
+unresolved. Histories with conflicting identities or unsafe labels also require
+separate manual reconciliation. Recovery does not erase historical secrets;
+existing reads and the raw file can still expose old content. Secure and audit
+those files separately, and do not pass secret URLs via a shell command line.
+
+Cooperating writers validate and append under one advisory file lock. Failed or
+short writes can leave a torn record; later writes fail closed until the history
+is reconciled. A failed fsync may leave a complete event despite the error; check
+the actual history before retrying. Discovery reads remain tolerant of damaged
+lines and must not be used as integrity proof. The lock does not coordinate
+writers that ignore it or independent synced replicas.
+
 ## Batch identity reservation (opt-in)
 
 `VersionedFindingsLedger.reserve_batch(candidates)` accepts a list of at most

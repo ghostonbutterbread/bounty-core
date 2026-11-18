@@ -21,7 +21,6 @@ def create(store: PublicArtifactStore) -> dict:
         visibility="public",
         purpose="owned renderer comparison",
         cleanup_method="delete",
-        details={"authorization": "Bearer do-not-store"},
     )
 
 
@@ -78,7 +77,7 @@ def test_latest_read_holds_interprocess_append_lock(tmp_path):
     kwargs: dict[str, Any] = dict(
         event="updated", producer="public-artifacts", artifact_id=created["artifact_id"],
         account_ref=created["account_ref"], artifact_kind=created["artifact_kind"],
-        url=created["url"], visibility="private",
+        url=created["url"], visibility="public",
     )
     ctx = multiprocessing.get_context("spawn")
     ready, release = ctx.Event(), ctx.Event()
@@ -96,8 +95,9 @@ def test_latest_read_holds_interprocess_append_lock(tmp_path):
         assert receive.recv() == "updated"
         process.join(15)
         assert process.exitcode == 0
-        store.record(**{**kwargs, "event": "cleanup_pending"})
-        assert [row["event"] for row in store.query()] == ["created", "updated", "cleanup_pending"]
+        store.record(**{**kwargs, "event": "visibility_changed", "visibility": "private"})
+        store.record(**{**kwargs, "event": "cleanup_pending", "visibility": "private"})
+        assert [row["event"] for row in store.query()] == ["created", "updated", "visibility_changed", "cleanup_pending"]
         assert store.current() == []
     finally:
         release.set()
@@ -164,7 +164,7 @@ def test_record_tracks_non_secret_account_and_artifact_url_in_lane_scoped_store(
     assert event["artifact_id"].startswith("PA-")
     assert event["account_ref"] == "owned+community@example.test"
     assert event["url"] == "https://community.example.test/posts/42"
-    assert event["details"]["authorization"] == "REDACTED"
+    assert event["details"] == {}
     assert store.events_path == tmp_path / "web_bounty" / "community-signal" / "web" / "public_artifacts" / "events.jsonl"
     assert json.loads(store.events_path.read_text(encoding="utf-8")) == event
 
@@ -182,6 +182,11 @@ def test_current_returns_one_latest_reusable_artifact_and_keeps_cleanup_history(
         visibility="private",
         purpose="reuse for a private comparison",
         cleanup_method="delete",
+    )
+    store.record(
+        event="cleanup_pending", producer="public-artifacts", artifact_id=created["artifact_id"],
+        account_ref=created["account_ref"], artifact_kind=created["artifact_kind"],
+        url=created["url"], visibility="private",
     )
     store.record(
         event="deleted",
@@ -219,17 +224,22 @@ def test_cleanup_pending_is_not_reusable_and_cleanup_verification_requires_its_d
             artifact_kind=created["artifact_kind"], url=created["url"], cleanup_verified=True,
         )
     store.record(
+        event="visibility_changed", producer="public-artifacts", artifact_id=created["artifact_id"],
+        account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
+        visibility="private",
+    )
+    store.record(
         event="cleanup_pending", producer="public-artifacts", artifact_id=created["artifact_id"],
         account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
-        visibility="public", cleanup_method="delete",
+        visibility="private", cleanup_method="delete",
     )
 
     assert store.current() == []
-    with pytest.raises(ValueError, match="cleanup_pending"):
+    with pytest.raises(ValueError, match="prior deleted"):
         store.record(
             event="cleanup_verified", producer="public-artifacts", artifact_id=created["artifact_id"],
             account_ref=created["account_ref"], artifact_kind=created["artifact_kind"], url=created["url"],
-            cleanup_verified=True,
+            visibility="private", cleanup_verified=True,
         )
 
 
@@ -268,7 +278,7 @@ def test_cleanup_state_cannot_be_revived_and_private_visibility_is_set_before_cl
     assert deleted["event"] == "deleted"
 
 
-def test_lifecycle_validation_rejects_unverified_cleanup_and_credential_bearing_values_are_redacted(tmp_path):
+def test_lifecycle_validation_rejects_unverified_cleanup_and_credential_bearing_urls(tmp_path):
     store = PublicArtifactStore("community-signal", root_override=tmp_path)
     with pytest.raises(ValueError, match="artifact_id"):
         store.record(
@@ -276,24 +286,18 @@ def test_lifecycle_validation_rejects_unverified_cleanup_and_credential_bearing_
             artifact_kind="post", url="https://alice:secret@example.test/post/1",
         )
 
-    event = store.record(
-        event="created", producer="public-artifacts", account_ref="owner",
-        artifact_kind="post", url="https://alice:secret@example.test/post/1?client_secret=do-not-store", visibility="private",
-        purpose="Bearer do-not-store",
-    )
-    serialized = json.dumps(event)
-    assert "alice" not in serialized
-    assert "do-not-store" not in serialized
-    assert event["url"] == "https://REDACTED@example.test/post/1?client_secret=REDACTED"
+    with pytest.raises(ValueError, match="canonical"):
+        store.record(
+            event="created", producer="public-artifacts", account_ref="owner",
+            artifact_kind="post", url="https://alice:secret@example.test/post/1?client_secret=do-not-store", visibility="private",
+        )
 
 
-def test_redaction_handles_bracketed_sensitive_query_keys(tmp_path):
+def test_rejects_bracketed_sensitive_query_keys(tmp_path):
     store = PublicArtifactStore("community-signal", root_override=tmp_path)
 
-    event = store.record(
-        event="created", producer="public-artifacts", account_ref="owner", artifact_kind="post",
-        url="https://community.example.test/post/1?client_secret%5B%5D=review-secret&normal=value",
-    )
-
-    assert "review-secret" not in json.dumps(event)
-    assert event["url"].endswith("client_secret%5B%5D=REDACTED&normal=value")
+    with pytest.raises(ValueError, match="canonical"):
+        store.record(
+            event="created", producer="public-artifacts", account_ref="owner", artifact_kind="post",
+            url="https://community.example.test/post/1?client_secret%5B%5D=review-secret&normal=value",
+        )
