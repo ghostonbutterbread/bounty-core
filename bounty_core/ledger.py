@@ -268,6 +268,7 @@ def _locked_payload(
     family: str | None = None,
     root_override: str | Path | None = None,
     storage_root: str | Path | None = None,
+    auto_write: bool = True,
 ) -> Iterator[dict[str, Any]]:
     program_slug = _normalize_program(program)
     root = _normalize_root_override(root_override, storage_root)
@@ -284,7 +285,7 @@ def _locked_payload(
         try:
             payload = _read_payload(path, program_slug)
             yield payload
-            if exclusive:
+            if exclusive and auto_write:
                 payload["updated_at"] = _timestamp_iso()
                 _write_json_atomic(path, payload)
         finally:
@@ -1284,6 +1285,82 @@ class VersionedFindingsLedger:
             merged["version_label"] = self.version_label
             merged["run_id"] = str(merged.get("run_id") or self.run_id)
         return (not reserved), fid, merged
+
+    def import_finding(self, candidate: dict[str, Any], *, packet_mode: str = EVIDENCE_ONLY) -> tuple[bool, str, dict[str, Any]]:
+        """Check, reserve and materialize a report under one ledger lock.
+
+        Return (is_duplicate, fid, finding), leaving completed duplicates
+        unchanged. A failed materialization leaves a persisted pending row: retry
+        this same operation to finish it. Other APIs cannot recover that row.
+        Packet/index I/O is not transactional, and only cooperating writers lock.
+        """
+        validate_packet_mode(packet_mode)
+        incoming = dict(candidate)
+        with _locked_payload(self.program, exclusive=True, lane=self.lane, family=self.family,
+                             root_override=self.root_override, auto_write=False) as payload:
+            findings = payload.setdefault("findings", [])
+            if not isinstance(findings, list):
+                findings = []
+                payload["findings"] = findings
+            if incoming.get("line") is not None or (incoming.get("type") or incoming.get("title")) is not None:
+                existing = _find_existing(findings, incoming)
+            else:
+                target = (_normalize_relpath(incoming.get("file")),
+                          _normalize_class_name(incoming.get("class_name") or incoming.get("vuln_class")))
+                existing = next(
+                    (row for row in findings if
+                     (_normalize_relpath(row.get("file")), _normalize_class_name(row.get("class_name"))) == target),
+                    None,
+                )
+            pending = existing.get("_atomic_import_pending") if existing is not None else None
+            if existing is not None and not pending:
+                merged = dict(incoming)
+                merged.update(_normalize_entry(existing) or {})
+                return True, str(existing.get("fid") or ""), merged
+            if existing is not None and pending != packet_mode:
+                raise ValueError("pending import packet mode differs; retry using its original mode")
+            preflight_finding_packets(self.storage, findings, packet_mode=packet_mode)
+            if existing is None:
+                reserved, fid = _reserve_in_payload(payload, incoming, self.snapshot_id, self.version_label,
+                    str(incoming.get("run_id") or self.run_id), str(incoming.get("agent") or self.agent))
+                assert reserved
+                stored = findings[-1]
+                patch = {k: v for k, v in _normalize_patch(incoming).items() if k not in _FID_PATCH_PROTECTED_FIELDS}
+                if "report_dir" in incoming:
+                    raise ValueError("report_dir is immutable; migrate a packet explicitly")
+                _validate_packet_pointer_patch(self.storage, stored, patch)
+                stored.update(patch)
+                stored["fid"] = fid
+                stored.setdefault("identity", _core_identity(self.program, str(self.family), self.lane, fid))
+                stored.setdefault("harness_fid", fid)
+                stored.setdefault("program", self.program)
+                stored.setdefault("family", self.family)
+                stored.setdefault("lane", self.lane)
+                stored.setdefault("title", str(stored.get("type") or "Unknown finding").strip())
+                stored.setdefault("asset", str(stored.get("file") or stored.get("url") or stored.get("endpoint") or "unknown").strip())
+                stored.setdefault("source_tool", str(stored.get("agent") or "bug-bounty-harness").strip())
+                if not str(stored.get("status") or "").strip():
+                    stored["status"] = _core_status_for(stored)
+                preflight_finding_packets(self.storage, findings, packet_mode=packet_mode)
+                if packet_mode == EVIDENCE_ONLY:
+                    reserve_finding_evidence_packet(self.storage, stored)
+                stored["_atomic_import_pending"] = packet_mode
+                payload["updated_at"] = _timestamp_iso()
+                _write_json_atomic(self.path, payload)
+            else:
+                stored = existing
+                fid = str(stored.get("fid") or "")
+            ensure_layout(self.storage)
+            if packet_mode == EVIDENCE_ONLY:
+                ensure_finding_evidence_packet(self.storage, stored)
+            else:
+                stored["report_path"] = str(write_finding_report(self.storage, stored))
+            refresh_indexes(self.storage, findings)
+            refresh_report_indexes(self.storage, findings, packet_mode=packet_mode)
+            del stored["_atomic_import_pending"]
+            payload["updated_at"] = _timestamp_iso()
+            _write_json_atomic(self.path, payload)
+            return False, fid, dict(stored)
 
     def reserve_batch(self, candidates: list[dict[str, Any]]) -> list[tuple[bool, str | None, dict[str, Any]]]:
         """Reserve up to 1000 identities together, returning check-like results in order.

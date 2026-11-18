@@ -1,15 +1,62 @@
 # Raw packet collision integration dossier
 
-- **Status:** BLOCKED for combined Core/BBH release: Core review corrections and isolated suite passed; consumer reservation/retry fix and independent re-review remain required. Do not merge, push, promote, or activate on this receipt alone.
+- **Status:** Core atomic import candidate implemented; local suite passes. BLOCKED from integration/publication pending independent review and BBH implementation, immutable pin/install, and combined release verification.
 - **Owner:** delegated Core implementer; parent owns review and integration.
 - **Branch / worktree:** `fix/core-raw-collision-minimal` / `/home/ryushe/worktrees/core-raw-collision-minimal`.
 - **Base / intended target:** fetched `origin/beta` `6142defb3de7cef44887c1685e4f670072585785` / `beta`.
 - **Prior checkpoints:** `e35033c6ce59aaec171a922edfa180c19924f82c`, `d510bca6d3aa0c1cf925ad2fb331fe14068712c7`, and regression checkpoint `51c181f598a2a8046c67a6a74b117336ed10f296`.
 - **Implementation/test checkpoints:** original `33b68293b9c31af6ac7082378bd96ee9cc2c3354`; review corrections `e394424b7208198bd40815c4c7779af5617a70b6`. Branch tip includes the subsequent dossier-only handoff.
-- **Latest test-only recovery checkpoint:** `f45c96adaa5d94c0eb096e909640bcaff684a761`; the following dossier-only commit records its evidence. Resume by designing a reviewed atomic consumer/provider contract, then make the BBH end-to-end xfails pass; no new production implementation was made in this checkpoint.
+- **Prior test-only recovery checkpoint:** `f45c96adaa5d94c0eb096e909640bcaff684a761`; the old split-call probe remains recoverable in history and is superseded by the candidate described below.
 - **Inspiration:** previous broader candidate on `fix/promo-fid-reserved-namespace`; not merged or modified here.
 
-## Check-preflight feasibility checkpoint
+## Current atomic-import candidate and handoff
+
+`VersionedFindingsLedger.import_finding(candidate, packet_mode="evidence_only")`
+returns `(is_duplicate, fid, finding)`. Under one exclusive lock it uses the
+existing `check()` duplicate rules, preflights the complete refresh set and new
+row, reserves the identity, creates the packet and refreshes indexes. Existing
+complete duplicates are unchanged. A new row is persisted with
+`_atomic_import_pending` before packet/index I/O; an exception propagates and a
+same-identity/same-mode call resumes that persisted row, returning nonduplicate
+on completion. Other modes are rejected while pending. It does not alter the
+existing `check`, `update`, `ledger_add`, or `reserve_batch` contracts.
+
+BBH's intended change is to replace the check and `update_team_finding` pair
+with this **single** operation, preserving the current ValueError/duplicate
+branches. `tests/test_bbh_reservation_raw_boundary.py` archives BBH
+`4ba241ce9859e7ee4964566e54976aeb032336fd` and modifies only its temporary
+`sync_reports.py` import call and removes the following update call; it invokes
+the adapted real entrypoint on synthetic roots with this Core source first on
+PYTHONPATH. It proves collision/retry, normal duplicate, and injected partial
+materialization recovery. This is not the unmodified BBH release, an installed
+Core pin, or a production test. The removed conditional xfail probes remain in
+git history at `f45c96adaa5d94c0eb096e909640bcaff684a761`; they diagnosed the
+old split-call path, which remains unsafe until BBH adopts the new API.
+
+Focused provider tests cover both packet modes, raw collision/retry, FID
+conflicts, interrupted refresh and final ledger-write failure, mode mismatch,
+and a pair of spawned-process lock interleavings (competitor wins before lock;
+competitor observes contention through materialization and wins afterward).
+Full suite: **294 passed**, no skips/xfails, on the isolated source worktree,
+disposable HOME/XDG/TMPDIR, socket-connect fence, and BBH git archive. Command:
+`BBH_TEST_REPO=/home/ryushe/worktrees/bbh-beta-fetcher-family-integration PYTHONPATH=$PWD:/home/ryushe/.hermes/cache/scratch/core-raw-fix.XGnLbNk2/site PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/python3 -m pytest -q -p no:cacheprovider --basetemp=<disposable> tests`.
+
+Boundaries: the lock coordinates only cooperating ledger writers; generated
+files and ledger are not a single transactional commit and no fsync or sudden
+power-loss guarantee is provided. Failures may leave partial output alongside a
+pending row. Other APIs/old BBH can mistake the pending row for a duplicate;
+pre-existing unmarked partial reservations cannot be auto-recovered. A newly
+introduced raw row after an interrupted operation prevents retry until manually
+resolved. The operation has no migration and does not guarantee ownership
+against noncooperating filesystem edits. Independent complete-diff review is
+required, followed by BBH implementation, pinning and installing a reviewed
+immutable Core revision, and real installed-consumer tests before release.
+Parent owns those steps, integration and Kanban. No push or activation here.
+
+## Historical check-preflight feasibility checkpoint
+
+Everything below this heading records the earlier state and its then-current
+blockers and proposed tests; the current status and receipt are above.
 
 The subsequent Core-only investigation did **not** implement a production fix for the BBH split transaction. `VersionedFindingsLedger.check` commits and releases its exclusive ledger lock before returning; the existing BBH `sync_reports_main` then calls `update_team_finding` separately. A full refresh-set plus proposed-row preflight under that first lock prevents an already-present collision, but it cannot exclude a cooperating writer that commits a legacy raw row after `check` returns and before the later refresh acquires its lock. That interleaving still leaves D01 reserved and causes a retry to falsely skip it. The lock cannot remain held across the two existing API calls without changing their ownership/lifetime contract. Silently materializing packets inside every `check` or globally rejecting valid ledger-only checks would change existing callers' behavior. No such broad behavioral change was made. An atomic check-and-materialize operation needs explicit caller adoption, or a separately designed durable incomplete-reservation/recovery contract; neither has been reviewed or implemented here. This is a blocker, not a complete race fix.
 

@@ -41,6 +41,37 @@ per-report recovery/ownership and retry contract, including failure injection
 through the consumer entrypoint, is still required before claiming that report
 imports are safely recoverable.
 
+## Report import with duplicate check (opt-in)
+
+`VersionedFindingsLedger.import_finding(candidate, packet_mode="evidence_only")`
+returns `(is_duplicate, fid, finding)`. It uses the `check()` identity rules;
+completed duplicates are returned without changing the ledger or adding a
+sighting. New imports validate the entire refresh set, reserve the FID, create
+its evidence packet and refresh indexes while holding the same exclusive ledger
+lock. `packet_mode="legacy"` instead creates a legacy report. A known raw packet
+collision or conflicting FID raises `ValueError` before reserving a new row.
+
+If materialization fails after the reservation, the row has
+`_atomic_import_pending` set to its packet mode. Retry `import_finding` with
+**the same candidate identity and packet mode**; it resumes the saved finding
+and returns `is_duplicate=False` on completion. A different mode is rejected.
+A successful retry after a completed import returns a duplicate. `check()`,
+`reserve_batch()`, and older consumers do not understand pending imports and
+can misclassify them as duplicates: route retries through this operation and
+reconcile pre-existing incomplete reservations manually. Never delete raw input
+or a reservation automatically to resolve ambiguity. An exception may leave
+partially materialized packet/index files; reservation replacement is atomic but
+not fsynced, and this is not a multi-file crash transaction. The lock protects
+only cooperating ledger writers. An exception can also occur before reservation,
+and a completed commit can occur before the caller receives the return value.
+
+For BBH's `sync_reports`, replace the `check(candidate)` and subsequent
+`update_team_finding(...)` pair with the one `import_finding(candidate,
+packet_mode="evidence_only")` call; handle the duplicate and `ValueError`
+branches as before. Set the same snapshot/version/run/agent on the ledger and
+candidate as in the existing workflow. The current BBH release does **not** do
+this; it must be changed and tested against an installed, pinned Core revision.
+
 ## Report UX
 
 The evidence-only report UX centers on stable finding packets and populated navigation:
