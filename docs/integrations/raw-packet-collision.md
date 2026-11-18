@@ -6,6 +6,7 @@
 - **Base / intended target:** fetched `origin/beta` `6142defb3de7cef44887c1685e4f670072585785` / `beta`.
 - **Prior checkpoints:** `e35033c6ce59aaec171a922edfa180c19924f82c`, `d510bca6d3aa0c1cf925ad2fb331fe14068712c7`, and regression checkpoint `51c181f598a2a8046c67a6a74b117336ed10f296`.
 - **Implementation/test checkpoints:** original `33b68293b9c31af6ac7082378bd96ee9cc2c3354`; review corrections `e394424b7208198bd40815c4c7779af5617a70b6`. Branch tip includes the subsequent dossier-only handoff.
+- **Atomic-import implementation checkpoint:** `f5185210ebbf5f16181b0f2e5e304786fa436456`; the branch tip also contains a later dossier-only handoff commit. Parent should review the full `origin/beta..fix/core-raw-collision-minimal` range and then coordinate the BBH adoption described below.
 - **Prior test-only recovery checkpoint:** `f45c96adaa5d94c0eb096e909640bcaff684a761`; the old split-call probe remains recoverable in history and is superseded by the candidate described below.
 - **Inspiration:** previous broader candidate on `fix/promo-fid-reserved-namespace`; not merged or modified here.
 
