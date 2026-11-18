@@ -613,6 +613,7 @@ def _preserve_hand_edited_report(layout: StorageLayout, finding: dict[str, Any],
 
 def _ensure_finding_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create the stable, agent-facing container for a finding report."""
+    _validate_historical_packet_pointers(layout, finding)
     packet_dir = canonical_finding_report_dir(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME
     if not is_finding_packet_path(layout.reports_root, finding, evidence_path):
@@ -684,16 +685,30 @@ def reserve_finding_evidence_packet(layout: StorageLayout, finding: dict[str, An
     return canonical_finding_report_dir(layout, finding)
 
 
+def _validate_historical_packet_pointers(layout: StorageLayout, finding: dict[str, Any]) -> None:
+    # Check both lexical normalization and actual symlink resolution: a missing
+    # alias/.. must still be caught, as must a symlink pointing into raw.
+    root = layout.reports_root.resolve(strict=False)
+    raw = root / "raw"
+    lexical_root = Path(os.path.abspath(layout.reports_root))
+    for key in ("report_dir", "report_path", "evidence_path"):
+        value = finding.get(key)
+        if not value:
+            continue
+        path = Path(str(value)).expanduser()
+        lexical = Path(os.path.abspath(path))
+        resolved = path.resolve(strict=False)
+        lexical_raw = lexical_root / "raw"
+        if lexical.is_relative_to(lexical_raw) or resolved.is_relative_to(raw):
+            raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
+        if (path.absolute().is_relative_to(lexical_root) or lexical.is_relative_to(lexical_root)) and not resolved.is_relative_to(root):
+            raise ValueError("historical packet pointer escapes reports_root")
+
+
 def preflight_finding_packets(layout: StorageLayout, findings: Iterable[dict[str, Any]], *, packet_mode: str) -> None:
     """Validate packet targets without changing the findings or filesystem."""
     for finding in findings:
-        # Historical pointers into raw are ambiguous even if report_dir is absent.
-        for key in ("report_dir", "report_path", "evidence_path"):
-            value = finding.get(key)
-            if value:
-                path = Path(str(value)).expanduser()
-                if path == layout.reports_root / "raw" or (layout.reports_root / "raw") in path.parents:
-                    raise ValueError("finding packet collides with reports/raw input; preserve it and resolve the ambiguous legacy record manually")
+        _validate_historical_packet_pointers(layout, finding)
         if packet_mode == EVIDENCE_ONLY:
             reserve_finding_evidence_packet(layout, dict(finding))
         else:
@@ -702,6 +717,7 @@ def preflight_finding_packets(layout: StorageLayout, findings: Iterable[dict[str
 
 def ensure_finding_evidence_packet(layout: StorageLayout, finding: dict[str, Any]) -> Path:
     """Create only the packet directories and EVIDENCE.md; never touch report files."""
+    _validate_historical_packet_pointers(layout, finding)
     reserve_finding_evidence_packet(layout, finding)
     packet_dir = _ensure_finding_packet(layout, finding)
     evidence_path = packet_dir / EVIDENCE_FILENAME

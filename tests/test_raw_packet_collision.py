@@ -263,6 +263,74 @@ def test_historical_raw_pointer_is_not_silently_reassigned(tmp_path, key):
     assert snapshot(tmp_path) == before
 
 
+@pytest.mark.parametrize('key', ['report_dir', 'report_path', 'evidence_path'])
+def test_aliased_raw_pointer_is_not_reassigned(tmp_path, key):
+    target = layout(tmp_path)
+    target.ledgers_root.mkdir(parents=True)
+    payload = json.loads((Path(__file__).parent / 'fixtures' / 'baseline_raw_ledger.json').read_text())
+    payload['findings'][0]['fid'] = 'D01'
+    pointer = target.reports_root / 'alias' / '..' / 'raw'
+    if key != 'report_dir':
+        pointer /= 'EVIDENCE.md'
+    payload['findings'][0][key] = str(pointer)
+    (target.ledgers_root / 'ledger.json').write_text(json.dumps(payload))
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match='raw|collision'):
+        refresh_report_navigation_from_ledger(target, packet_mode='evidence_only')
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize('key', ['report_path', 'evidence_path'])
+@pytest.mark.parametrize('destination', ['raw', 'outside'])
+def test_historical_symlink_pointer_cannot_hide_raw_or_escape(tmp_path, key, destination):
+    target = layout(tmp_path)
+    target.ledgers_root.mkdir(parents=True)
+    raw = target.reports_root / 'raw'
+    raw.mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'EVIDENCE.md').write_text('outside data')
+    (target.reports_root / 'alias').symlink_to(raw if destination == 'raw' else outside, target_is_directory=True)
+    payload = json.loads((Path(__file__).parent / 'fixtures' / 'baseline_raw_ledger.json').read_text())
+    payload['findings'][0]['fid'] = 'D01'
+    payload['findings'][0][key] = str(target.reports_root / 'alias' / 'EVIDENCE.md')
+    (target.ledgers_root / 'ledger.json').write_text(json.dumps(payload))
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match='raw|collision|escapes'):
+        refresh_report_navigation_from_ledger(target, packet_mode='evidence_only')
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize('key', ['report_path', 'evidence_path'])
+def test_historical_traversal_outside_reports_is_rejected(tmp_path, key):
+    target = layout(tmp_path)
+    target.ledgers_root.mkdir(parents=True)
+    payload = json.loads((Path(__file__).parent / 'fixtures' / 'baseline_raw_ledger.json').read_text())
+    payload['findings'][0]['fid'] = 'D01'
+    payload['findings'][0][key] = str(target.reports_root / '..' / 'outside.md')
+    (target.ledgers_root / 'ledger.json').write_text(json.dumps(payload))
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match='escapes'):
+        refresh_report_navigation_from_ledger(target, packet_mode='evidence_only')
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize('writer', [write_finding_report, ensure_finding_evidence_packet])
+@pytest.mark.parametrize('key', ['report_path', 'evidence_path'])
+def test_direct_writer_preserves_raw_pointer(tmp_path, writer, key):
+    target = layout(tmp_path)
+    raw = target.reports_root / 'raw'
+    raw.mkdir(parents=True)
+    (raw / 'EVIDENCE.md').write_text('original intake')
+    finding = {'fid': 'D01', 'title': 'Bug', key: str(raw / 'EVIDENCE.md')}
+    original = dict(finding)
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match='raw|collision'):
+        writer(target, finding)
+    assert finding == original
+    assert snapshot(tmp_path) == before
+
+
 @pytest.mark.parametrize('method', ['patch', 'update'])
 def test_update_does_not_touch_safe_packet_before_historical_collision(tmp_path, method):
     added = add_finding({'program': 'acme', 'fid': 'D01', 'title': 'Bug', 'type': 'xss', 'asset': 'example.test'},
