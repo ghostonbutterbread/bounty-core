@@ -5,7 +5,7 @@
 - **Owning feature branch/ref:** `fix/promo-artifact-safety` in the separate clone `/home/ryushe/worktrees/bounty-core-promo-artifact-safety`
 - **Base commit:** `6142defb3de7cef44887c1685e4f670072585785` (fetched `origin/beta`)
 - **Intended integration target:** Core `beta`, then separately authorized beta → `master` promotion
-- **Latest immutable recovery checkpoint / implementation commit:** `66ef4cb65873686943d33e0670cb95864370cba5`
+- **Latest immutable recovery checkpoint / implementation commit:** `c1e41e892498e45dd48860b3d0846c8c103984ed` (the branch tip also contains this later dossier-only handoff commit)
 - **Last updated:** 2026-11-17
 - **Inspiration / references:** independent promotion review findings; BBH `public-artifacts` policy and `agents/public_artifacts.py` consumer.
 
@@ -34,6 +34,6 @@ Reject credentialed, query-bearing, fragment-bearing, redactor-altered or malfor
 
 ## Resume / decision gates
 
-- Resume from the implementation checkpoint and the later dossier-only tip on `fix/promo-artifact-safety`; verify both commit IDs and diff. This is a separate clone, so the integration owner must explicitly fetch the local feature ref from that clone before merging/cherry-picking; no shared refs were changed.
+- Resume from correction checkpoint `c1e41e892498e45dd48860b3d0846c8c103984ed` and the later dossier-only tip on `fix/promo-artifact-safety`; verify both commit IDs and diff against base `6142defb3de7cef44887c1685e4f670072585785`. This is a separate clone, so the integration owner must explicitly fetch the local feature ref from that clone before merging/cherry-picking; no shared refs were changed.
 - Exact next action: independent review of the revised full range, particularly explicit legacy recovery attestation, history integrity, direct-deletion proof and published BBH gaps; reconcile any findings. Target `beta`; remove this branch-local dossier on integration. Do not push or promote or activate runtime as part of this handoff.
 - Integration gate: parent-run review and combined integration tests. Promotion and runtime activation are separate decisions.
