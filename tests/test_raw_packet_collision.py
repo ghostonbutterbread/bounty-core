@@ -1,4 +1,6 @@
 """Raw intake is never a finding packet, even for historic raw FIDs."""
+import json
+import multiprocessing
 import shutil
 from pathlib import Path
 
@@ -16,7 +18,16 @@ def layout(root):
 
 
 def snapshot(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file() and not p.name.endswith('.lock')}
+    result = {}
+    for p in root.rglob('*'):
+        relative = str(p.relative_to(root))
+        if p.is_symlink():
+            result[relative] = ('symlink', str(p.readlink()))
+        elif p.is_dir():
+            result[relative] = ('directory',)
+        elif p.is_file():
+            result[relative] = ('file', p.read_bytes())
+    return result
 
 
 @pytest.mark.parametrize('source', [False, True])
@@ -89,3 +100,79 @@ def test_refresh_with_historical_raw_fails_before_any_effect(tmp_path):
     with pytest.raises(ValueError, match='raw|collision'):
         refresh_report_navigation_from_ledger(layout(tmp_path), packet_mode='evidence_only')
     assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'evidence_only'])
+def test_refresh_preflights_later_ambiguous_raw_before_first_packet(tmp_path, mode):
+    target = layout(tmp_path)
+    target.ledgers_root.mkdir(parents=True)
+    payload = json.loads((Path(__file__).parent / 'fixtures' / 'baseline_raw_ledger.json').read_text())
+    safe = dict(payload['findings'][0], fid='D01', file='safe.js')
+    payload['findings'].insert(0, safe)
+    (target.ledgers_root / 'ledger.json').write_text(json.dumps(payload))
+    # A legacy store can have a ledger but no lock. Never remove a lock after
+    # acquiring it: another waiter could already hold its inode open.
+    raw = target.reports_root / 'raw'
+    raw.mkdir(parents=True)
+    (raw / 'input.md').write_text('original intake')
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match='raw|collision'):
+        refresh_report_navigation_from_ledger(target, packet_mode=mode)
+    assert snapshot(tmp_path) == before
+
+
+def _gated_add(root, waiting, release, result):
+    import fcntl
+    original = fcntl.flock
+    gated = False
+
+    def gate(fd, operation):
+        nonlocal gated
+        if operation == fcntl.LOCK_EX and not gated:
+            gated = True
+            waiting.set()
+            if not release.wait(10):
+                raise TimeoutError('lock gate not released')
+        return original(fd, operation)
+
+    fcntl.flock = gate
+    try:
+        add_finding({'program': 'acme', 'fid': 'D01', 'title': 'Bug',
+                     'type': 'xss', 'asset': 'example.test'},
+                    root_override=root, packet_mode='evidence_only')
+    except Exception as exc:
+        result.put((type(exc).__name__, str(exc)))
+    else:
+        result.put(('success', ''))
+    finally:
+        fcntl.flock = original
+
+
+def test_concurrent_raw_ledger_claim_is_rechecked_under_lock(tmp_path):
+    raw = layout(tmp_path).reports_root / 'raw'
+    raw.mkdir(parents=True)
+    (raw / 'input.md').write_text('original intake')
+    ctx = multiprocessing.get_context('spawn')
+    waiting, release, result = ctx.Event(), ctx.Event(), ctx.Queue()
+    process = ctx.Process(target=_gated_add, args=(tmp_path, waiting, release, result))
+    process.start()
+    try:
+        assert waiting.wait(10), 'writer never reached the ledger flock'
+        ledger_add('acme', {'fid': 'raw', 'file': 'old.js', 'line': 3,
+                            'type': 'xss', 'class_name': 'xss'},
+                   'snapshot', 'v1', 'run', 'agent', family='web_bounty',
+                   lane='web', root_override=tmp_path)
+        before = snapshot(tmp_path)
+        release.set()
+        process.join(10)
+        assert not process.is_alive(), 'writer did not finish'
+        assert process.exitcode == 0
+        kind, message = result.get(timeout=5)
+        assert kind == 'ValueError' and ('raw' in message or 'collision' in message)
+        assert snapshot(tmp_path) == before
+    finally:
+        release.set()
+        if process.is_alive():
+            process.terminate()
+        process.join(10)
+        result.close()
