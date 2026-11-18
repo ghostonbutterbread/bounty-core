@@ -209,6 +209,73 @@ def test_published_bbh_cli_accepts_original_purpose(tmp_path):
     assert PublicArtifactStore("program", root_override=tmp_path).current() == [event]
 
 
+@pytest.mark.parametrize("label", [
+    "client_secret: synthetic-example-value", "client-secret=synthetic-example-value",
+    "CLIENT_SECRET = synthetic-example-value", "client-secret: synthetic-example-value",
+    "x_api_key: synthetic-example-value", "x-api-key=synthetic-example-value",
+    "X_API_KEY = synthetic-example-value", "x-api-key: synthetic-example-value",
+])
+@pytest.mark.parametrize("field", ["purpose", "cleanup_method", "account_ref", "object_id", "model_id"])
+def test_rejects_labeled_credentials_without_echo_or_write(tmp_path, field, label):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    created = store.record(**args())
+    before = store.events_path.read_bytes()
+    with pytest.raises(ValueError) as exc:
+        store.record(**args(event="updated", artifact_id=created["artifact_id"], **{field: label}))
+    assert label not in str(exc.value) and "synthetic-example-value" not in str(exc.value)
+    assert store.events_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("purpose", [
+    "Test password reset rendering", "Review session cookie display",
+    "Test rendering [desktop] at 75%", "Compare value = expected [100%]",
+    "Test rendering: display name",
+])
+def test_cli_accepts_harmless_descriptions(tmp_path, purpose):
+    cli = os.environ.get("BBH_PUBLIC_ARTIFACT_CLI")
+    if not cli:
+        pytest.skip("set BBH_PUBLIC_ARTIFACT_CLI to the published BBH CLI source")
+    assert cli is not None
+    result = subprocess.run(
+        [sys.executable, cli, "--root", str(tmp_path), "record", "--program", "program",
+         "--event", "created", "--account-ref", "owner", "--artifact-kind", "post",
+         "--url", "https://example.test/posts/42", "--visibility", "public", "--purpose", purpose],
+        capture_output=True, text=True, env=os.environ.copy(),
+    )
+    assert result.returncode == 0, result.stderr
+    event = json.loads(result.stdout)
+    assert event["purpose"] == purpose
+    assert PublicArtifactStore("program", root_override=tmp_path).current() == [event]
+
+
+@pytest.mark.parametrize("purpose", [
+    "client_secret: synthetic-example-value", "client_secret=synthetic-example-value",
+    "client-secret: synthetic-example-value", "client-secret=synthetic-example-value",
+    "x_api_key: synthetic-example-value", "x_api_key=synthetic-example-value",
+    "x-api-key: synthetic-example-value", "x-api-key=synthetic-example-value",
+    "https://user:synthetic-example-value@example.test/posts/42",
+    "https://example.test/posts/42?share=synthetic-example-value",
+])
+def test_cli_rejects_sensitive_purpose_without_echo_or_write(tmp_path, purpose):
+    cli = os.environ.get("BBH_PUBLIC_ARTIFACT_CLI")
+    if not cli:
+        pytest.skip("set BBH_PUBLIC_ARTIFACT_CLI to the published BBH CLI source")
+    assert cli is not None
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    store.record(**args())
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = subprocess.run(
+        [sys.executable, cli, "--root", str(tmp_path), "record", "--program", "program",
+         "--event", "created", "--account-ref", "owner", "--artifact-kind", "post",
+         "--url", "https://example.test/posts/42", "--visibility", "public", "--purpose", purpose],
+        capture_output=True, text=True, env=os.environ.copy(),
+    )
+    assert result.returncode != 0
+    assert "synthetic-example-value" not in result.stdout + result.stderr
+    assert purpose not in result.stdout + result.stderr
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
 @pytest.mark.parametrize("field,value", [
     ("url", "https://example.test/posts/other"), ("account_ref", "other"),
     ("artifact_kind", "listing"), ("object_id", "other"),

@@ -317,14 +317,26 @@ def _canonical_url(value: str) -> str:
     return value
 
 
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?<![\w-])(?:[a-z0-9]+[_-])*(?:password|secret|token|authorization|cookie|"
+    r"session|bearer|api[_-]?key|apikey|csrf|nonce)(?:[_-][a-z0-9]+)*\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
+_LABEL_URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
+
 def _safe_text(value: str | None, name: str, *, required: bool = False) -> str | None:
     text = _required(value, name) if required else _optional(value)
     if text is None:
         return None
-    # These are short ownership labels, not a content or request archive.
-    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'():;!&-]+", text)
-            or redact_event_value(text) != text
-            or re.search(r"\b(?:password|secret|token|authorization|cookie|bearer)\b", text, re.I)):
+    # Short labels are not an archive of markup, requests, or credentials.
+    # Match key/value syntax, not isolated security words in normal prose.
+    unsafe_url = any("@" in match.group().split("/", 3)[2].split("?", 1)[0].split("#", 1)[0]
+                     or "?" in match.group() or "#" in match.group()
+                     for match in _LABEL_URL.finditer(text))
+    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'():;!&\[\]%=?-]+", text)
+            or _CREDENTIAL_ASSIGNMENT.search(text) or unsafe_url
+            or redact_event_value(text) != text):
         raise ValueError(f"{name} must be a non-secret short label")
     return text
 
