@@ -86,7 +86,7 @@ class PublicArtifactStore:
             "producer": _safe_text(producer, "producer", required=True),
             "account_ref": _safe_text(account_ref, "account_ref", required=True),
             "artifact_kind": _safe_text(artifact_kind, "artifact_kind", required=True),
-            "url": _canonical_url(_required(url, "url")),
+            "url": _canonical_url(url),
             "object_id": _safe_text(object_id, "object_id"),
             "visibility": normalized_visibility,
             "purpose": _safe_text(purpose, "purpose"),
@@ -106,6 +106,63 @@ class PublicArtifactStore:
                 if latest and not row["object_id"]:
                     row["object_id"] = latest.get("object_id")
                 stored = redact_event_value(row)
+                _validate_identity(stored, row)
+                encoded = (json.dumps(stored, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+                if handle.write(encoded) != len(encoded):
+                    raise OSError("incomplete artifact event append; history requires reconciliation")
+                os.fsync(handle.fileno())
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return stored
+
+    def recover_legacy_url(
+        self, *, artifact_id: str, previous_url: str, canonical_url: str,
+        producer: str, identity_confirmed: bool,
+    ) -> dict[str, Any]:
+        """Explicitly attest a safe replacement for an unusable historical URL.
+
+        The caller must establish that both URLs identify the same owned object.
+        Old bytes are retained, not sanitized. No legacy URL is copied to the new row.
+        """
+        if identity_confirmed is not True:
+            raise ValueError("legacy recovery requires explicit identity confirmation")
+        safe_artifact_id = _safe_text(artifact_id, "artifact_id", required=True)
+        canonical_url = _canonical_url(canonical_url)
+        safe_producer = _safe_text(producer, "producer", required=True)
+        if not self.events_path.exists():
+            raise ValueError("legacy recovery requires an existing artifact")
+        with self.events_path.open("ab", buffering=0) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                latest = self._latest(safe_artifact_id)
+                if latest is None or latest.get("url") != previous_url:
+                    raise ValueError("legacy recovery requires the exact latest historical URL")
+                try:
+                    _canonical_url(latest["url"])
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError("legacy recovery requires a noncanonical historical URL")
+                row = {
+                    "schema_version": SCHEMA_VERSION,
+                    "event_id": f"PAE-{uuid4().hex}",
+                    "artifact_id": safe_artifact_id,
+                    "timestamp": utc_timestamp(),
+                    "event": latest["event"],
+                    "producer": safe_producer,
+                    "account_ref": _safe_text(latest["account_ref"], "account_ref", required=True),
+                    "artifact_kind": _safe_text(latest["artifact_kind"], "artifact_kind", required=True),
+                    "url": canonical_url,
+                    "object_id": _safe_text(latest.get("object_id"), "object_id"),
+                    "visibility": latest["visibility"],
+                    "purpose": None,
+                    "cleanup_method": None,
+                    "cleanup_verified": latest.get("cleanup_verified") is True,
+                    "details": {},
+                    "recovered_from_event_id": _safe_text(latest["event_id"], "event_id", required=True),
+                }
+                stored = redact_event_value(row)
+                _validate_identity(stored, row)
                 encoded = (json.dumps(stored, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
                 if handle.write(encoded) != len(encoded):
                     raise OSError("incomplete artifact event append; history requires reconciliation")
@@ -121,7 +178,15 @@ class PublicArtifactStore:
         for row in _rows(self.events_path, strict=True):
             if row["artifact_id"] == artifact_id:
                 if latest:
-                    _validate_identity(row, latest)
+                    recovery = row.get("recovered_from_event_id")
+                    if recovery:
+                        if (recovery != latest["event_id"] or row["event"] != latest["event"]
+                                or row["visibility"] != latest["visibility"]
+                                or row.get("cleanup_verified") != (latest.get("cleanup_verified") is True)):
+                            raise ValueError("invalid legacy recovery record")
+                        _validate_identity(row, latest, allow_url_change=True)
+                    else:
+                        _validate_identity(row, latest)
                     if not row.get("object_id"):
                         row["object_id"] = latest.get("object_id")
                 latest = row
@@ -157,8 +222,10 @@ class PublicArtifactStore:
         return records[:limit]
 
 
-def _validate_identity(row: Mapping[str, Any], latest: Mapping[str, Any]) -> None:
+def _validate_identity(row: Mapping[str, Any], latest: Mapping[str, Any], *, allow_url_change: bool = False) -> None:
     for field in ("account_ref", "artifact_kind", "url", "object_id"):
+        if field == "url" and allow_url_change:
+            continue
         old, new = latest.get(field), row.get(field)
         if field == "object_id" and (not old or not new):
             continue
@@ -176,12 +243,9 @@ def _validate_transition(row: Mapping[str, Any], latest: Mapping[str, Any] | Non
         raise ValueError("lifecycle events require a prior created artifact")
     _validate_identity(row, latest)
     prior_event = str(latest["event"])
-    if event in {"cleanup_pending", "deleted", "cleanup_verified"}:
+    if event == "cleanup_pending":
         if visibility != "private" or latest["visibility"] != "private":
             raise ValueError("cleanup requires previously recorded private visibility")
-        required_prior = {"deleted": "cleanup_pending", "cleanup_verified": "deleted"}.get(event)
-        if required_prior and prior_event != required_prior:
-            raise ValueError(f"{event} requires a prior {required_prior} event")
     elif event != "visibility_changed" and visibility != latest["visibility"]:
         raise ValueError("visibility changes require a visibility_changed event")
     if prior_event in {"deleted", "cleanup_verified"}:
@@ -191,6 +255,8 @@ def _validate_transition(row: Mapping[str, Any], latest: Mapping[str, Any] | Non
     if prior_event == "cleanup_pending":
         if event == "deleted":
             return
+        if event == "cleanup_verified":
+            raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
         raise ValueError("cleanup_pending permits only deletion")
     if event == "cleanup_verified":
         raise ValueError("cleanup_verified requires a prior deleted event for the artifact")
@@ -236,12 +302,15 @@ def _choice(value: str, name: str, allowed: set[str]) -> str:
 
 def _canonical_url(value: str) -> str:
     try:
+        if not isinstance(value, str):
+            raise ValueError
         parsed = urlsplit(value)
         _ = parsed.port  # force validation of malformed ports
         if (parsed.scheme not in {"http", "https"} or not parsed.hostname
                 or "@" in parsed.netloc or "?" in value or "#" in value
                 or "\\" in value or "%" in parsed.netloc
-                or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)):
+                or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+                or redact_event_value(value) != value):
             raise ValueError
     except ValueError:
         raise ValueError("url must be an absolute canonical http(s) URL without credentials, query, or fragment") from None

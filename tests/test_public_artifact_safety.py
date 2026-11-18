@@ -1,6 +1,7 @@
 """Regressions at the public-artifact persistence boundary."""
 import multiprocessing
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,111 @@ def args(**overrides):
                    visibility="public"), **overrides}
 
 
+def test_redaction_cannot_change_an_accepted_url_identity(tmp_path):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    url = "https://example.test/posts/token:abc"
+    with pytest.raises(ValueError, match="url"):
+        store.record(**args(url=url))
+    assert not store.events_path.exists()
+
+
+def baseline_store(tmp_path, name):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    store.root.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "public_artifact_baseline" / f"{name}.jsonl", store.events_path)
+    return store, store.current(include_cleaned=True)[0]
+
+
+def test_legacy_public_pending_can_be_deleted_and_verified_without_claiming_private(tmp_path):
+    store, pending = baseline_store(tmp_path, "public_pending")
+    common = dict(artifact_id=pending["artifact_id"])
+    deleted = store.record(**args(event="deleted", **common))
+    assert deleted["visibility"] == "public"
+    assert not deleted["cleanup_verified"]
+    verified = store.record(**args(event="cleanup_verified", cleanup_verified=True, **common))
+    assert verified["visibility"] == "public"
+    assert store.current() == []
+    assert store.current(include_cleaned=True) == [verified]
+
+
+def test_direct_public_deletion_is_recorded_without_inventing_private_state(tmp_path):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    created = store.record(**args())
+    common = dict(artifact_id=created["artifact_id"])
+    deleted = store.record(**args(event="deleted", **common))
+    assert deleted["visibility"] == "public" and not deleted["cleanup_verified"]
+    assert store.current() == []
+    verified = store.record(**args(event="cleanup_verified", cleanup_verified=True, **common))
+    assert verified["visibility"] == "public"
+
+
+def test_baseline_public_deletion_can_be_verified_without_inventing_private_state(tmp_path):
+    store, deleted = baseline_store(tmp_path, "public_deleted")
+    verified = store.record(**args(event="cleanup_verified", cleanup_verified=True,
+                                   artifact_id=deleted["artifact_id"]))
+    assert verified["visibility"] == "public"
+
+
+def test_explicit_recovery_of_baseline_query_identity_preserves_history(tmp_path):
+    store, legacy = baseline_store(tmp_path, "query_created")
+    before = store.events_path.read_bytes()
+    canonical = "https://example.test/posts/42"
+    with pytest.raises(ValueError):
+        store.record(**args(event="updated", artifact_id=legacy["artifact_id"], url=canonical))
+    recovered = store.recover_legacy_url(artifact_id=legacy["artifact_id"],
+        previous_url=legacy["url"], canonical_url=canonical, producer="public-artifacts", identity_confirmed=True)
+    assert recovered["url"] == canonical
+    assert recovered["recovered_from_event_id"] == legacy["event_id"]
+    assert store.events_path.read_bytes().startswith(before)
+    assert legacy["url"].encode() not in store.events_path.read_bytes()[len(before):]
+    updated = store.record(**args(event="updated", artifact_id=legacy["artifact_id"], url=canonical))
+    assert updated["url"] == canonical
+    assert store.current() == [updated]
+
+
+def test_legacy_recovery_rejects_wrong_or_unsafe_identity_without_writing(tmp_path):
+    store, legacy = baseline_store(tmp_path, "query_created")
+    before = store.events_path.read_bytes()
+    for old, new in [("https://example.test/posts/43?view=thread", "https://example.test/posts/42"),
+                     (legacy["url"], "https://example.test/posts/42?share=secret")]:
+        with pytest.raises(ValueError) as error:
+            store.recover_legacy_url(artifact_id=legacy["artifact_id"], previous_url=old,
+                                     canonical_url=new, producer="public-artifacts", identity_confirmed=True)
+        assert old not in str(error.value) and new not in str(error.value)
+        assert store.events_path.read_bytes() == before
+    with pytest.raises(ValueError, match="identity confirmation"):
+        store.recover_legacy_url(artifact_id=legacy["artifact_id"], previous_url=legacy["url"],
+                                 canonical_url="https://example.test/posts/42",
+                                 producer="public-artifacts", identity_confirmed=False)
+    assert store.events_path.read_bytes() == before
+
+
+def test_recovery_does_not_allow_rebinding_an_already_canonical_url(tmp_path):
+    store = PublicArtifactStore("program", root_override=tmp_path)
+    created = store.record(**args())
+    before = store.events_path.read_bytes()
+    with pytest.raises(ValueError, match="noncanonical"):
+        store.recover_legacy_url(artifact_id=created["artifact_id"], previous_url=created["url"],
+                                 canonical_url="https://example.test/posts/43",
+                                 producer="public-artifacts", identity_confirmed=True)
+    assert store.events_path.read_bytes() == before
+
+
+def test_legacy_query_pending_recovery_preserves_state_without_copying_old_secret(tmp_path):
+    store, pending = baseline_store(tmp_path, "query_pending")
+    before = store.events_path.read_bytes()
+    recovered = store.recover_legacy_url(artifact_id=pending["artifact_id"], previous_url=pending["url"],
+        canonical_url="https://example.test/posts/42", producer="public-artifacts", identity_confirmed=True)
+    assert recovered["event"] == "cleanup_pending" and recovered["visibility"] == "public"
+    assert b"EXAMPLE_PRIVATE_VALUE" not in store.events_path.read_bytes()[len(before):]
+    assert store.current() == []
+    deleted = store.record(**args(event="deleted", artifact_id=pending["artifact_id"]))
+    assert deleted["visibility"] == "public"
+    verified = store.record(**args(event="cleanup_verified", artifact_id=pending["artifact_id"],
+                                   cleanup_verified=True))
+    assert verified["cleanup_verified"] is True
+
+
 @pytest.mark.parametrize("url", [
     "https://user:pass@example.test/posts/42", "https://@example.test/posts/42",
     "https://example.test/posts/42?share=opaque", "https://example.test/posts/42#opaque",
@@ -21,6 +127,7 @@ def args(**overrides):
     "file:///posts/42", "https://example.test:bad/posts/42", "https://example.test/\npost",
     "https://example.test\\@other.test/post", "https://example.test%40other.test/post",
     "https://example.test/posts?client_secret%5B%5D=opaque",
+    " https://example.test/posts/42", "https://example.test/posts/42 ",
 ])
 def test_rejects_noncanonical_url_without_disclosing_input(tmp_path, url):
     store = PublicArtifactStore("program", root_override=tmp_path)

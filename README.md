@@ -28,19 +28,36 @@ private bodies. Labels and canonical paths can contain arbitrary-looking opaque
 values: validation cannot determine whether an unlabeled value or a path is a
 secret or a sensitive share link. The caller must ensure they are safe before
 calling; syntactic validation is not a privacy guarantee. Older events are not
-rewritten or sanitized by this change; audit existing stores separately.
+rewritten or sanitized by this change; audit existing stores separately. URLs
+that the redactor would change are rejected rather than persisted under a
+different identity.
 
 For one `artifact_id`, account reference, kind, canonical URL and any supplied
 object ID are bound to the original identity. An omitted known object ID is
 retained. A URL or account change needs a separately tracked artifact, not a
 cleanup event against the old ID. Visibility changes use `visibility_changed`;
-cleanup requires previously recorded private visibility, then
-`cleanup_pending` → `deleted` → `cleanup_verified`, with a literal true
-`cleanup_verified` on the last event. Thus direct deletion of a public post
-cannot currently be represented as completed cleanup: keep it unresolved rather
-than claim it was private. `current()` excludes pending and later states;
+`cleanup_pending` requires previously recorded private visibility. Direct
+`deleted` is also supported, retaining the last recorded visibility (including
+public), without asserting an invented private transition. An existing legacy
+public `cleanup_pending` can likewise advance to `deleted` with unchanged
+visibility. `cleanup_verified` requires a prior `deleted` and literal true
+`cleanup_verified`. Deletion alone is not verification. `current()` excludes pending and later states;
 `include_cleaned=True` exposes their latest rows. These are caller-recorded
 claims, not independent proof of platform state.
+
+For a historical URL that cannot pass the new canonical rules, explicitly call
+`recover_legacy_url(artifact_id=..., previous_url=..., canonical_url=...,
+producer=..., identity_confirmed=True)` only after independently establishing
+that the safe replacement identifies the same owned object. The exact latest
+stored URL is compared under the write lock but is not copied into the recovery
+row. The event preserves lifecycle state and links to the previous event ID;
+subsequent writes use the replacement URL. This is an operator attestation, not
+automatic identity proof: query strings can carry essential identity, so do not
+simply strip them. If no safe replacement can be verified, leave the history
+unresolved. Histories with conflicting identities or unsafe labels also require
+separate manual reconciliation. Recovery does not erase historical secrets;
+existing reads and the raw file can still expose old content. Secure and audit
+those files separately, and do not pass secret URLs via a shell command line.
 
 Cooperating writers validate and append under one advisory file lock. Failed or
 short writes can leave a torn record; later writes fail closed until the history

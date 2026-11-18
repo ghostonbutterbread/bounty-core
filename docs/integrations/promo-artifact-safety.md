@@ -1,6 +1,6 @@
 # Public-artifact privacy and cleanup integration dossier
 
-- **Status:** awaiting independent review
+- **Status:** review blockers addressed; corrections require independent review
 - **Owner:** delegated Core artifact-safety worker
 - **Owning feature branch/ref:** `fix/promo-artifact-safety` in the separate clone `/home/ryushe/worktrees/bounty-core-promo-artifact-safety`
 - **Base commit:** `6142defb3de7cef44887c1685e4f670072585785` (fetched `origin/beta`)
@@ -11,7 +11,7 @@
 
 ## Intent and implemented contract
 
-Reject credentialed, query-bearing, fragment-bearing or malformed URLs and nonempty arbitrary details at the actual shared store boundary, with safe error messages. Guard remaining short text fields against common obvious secret/payload forms. Bind later lifecycle records to account, kind, exact URL and any known object ID under the append lock. Omitted object IDs retain prior known identity. Require a recorded private state before cleanup and the BBH-compatible pending → deleted → verified sequence; avoid silent visibility changes and accept only a real boolean cleanup flag. Preserve incomplete or corrupt history and reject further writes; an fsync failure leaves append outcome uncertain. Read views remain tolerant and are not integrity checks.
+Reject credentialed, query-bearing, fragment-bearing, redactor-altered or malformed URLs and nonempty arbitrary details at the shared store boundary, with safe error messages. Bind later lifecycle records to account, kind, exact URL and any known object ID under the append lock. Reject any redaction that changes a bound identity. Omitted object IDs retain prior known identity. New pending cleanup requires a recorded private state, but direct deletion and legacy public pending → deletion retain the recorded visibility rather than inventing a private transition. Verification requires an actual prior deletion record and literal true; deletion alone is not verification. Explicit `recover_legacy_url` lets an operator attest a same-object safe canonical replacement for an unsafe historical URL, with locked exact-old-URL matching and no unsafe URL copied into the new row; it preserves state and never rewrites historical bytes. Preserve incomplete or corrupt history and reject further writes; an fsync failure leaves append outcome uncertain. Read views remain tolerant and are not integrity checks.
 
 ## Evidence and review
 
@@ -20,18 +20,20 @@ Reject credentialed, query-bearing, fragment-bearing or malformed URLs and nonem
 - Isolated BBH CLI consumer workflow: 3 passed from `/home/ryushe/worktrees/bbh-artifact-contract`, `BOUNTY_CORE_TEST_SOURCE` and `PYTHONPATH` both pointing to this clone; same interpreter, disposable HOME/XDG/TMPDIR.
 - Regression coverage includes mismatched account/kind/URL/object ID, public-to-cleanup skip, nonboolean evidence, invalid URL/detail/sensitive variants, torn writes, uncertain fsync, lock ownership, and deterministic competing-process identity revalidation.
 - `git diff --check` passed before implementation commit. Parent/independent reviewer must assess the exact commit range and behavioral compatibility; no independent acceptance is claimed.
+- Corrections add real baseline-generated fixtures from `6142def` for public pending/deletion and query-bearing histories, including a synthetic retained query secret. They cover explicit identity confirmation, noncopying of the unsafe URL, refusal to rebind a canonical URL, public direct deletion, legacy pending progression, and literal verification. Candidate regressions were observed failing first. A source-level published BBH `origin/beta` CLI test at `1f881dc78c0bc472bfc40b550aa5e057db6223a3` passed all 3 existing tests; a separate actual CLI exercise successfully updated after Core URL recovery and confirmed CLI direct public deletion remains blocked.
+- Final isolated Core suite after corrections: **283 passed**, `env -i` with disposable HOME/XDG/TMPDIR and checkout-first PYTHONPATH, `/home/ryushe/projects/bug_bounty_harness/.venv/bin/python -m pytest -q -p no:cacheprovider tests`. Published BBH-source CLI regression rerun after final code: **3 passed**, using the same isolated interpreter and explicit Core source. This is not an installed/pinned consumer test.
 
 ## Blockers, caveats and deferred work
 
-- Semantic privacy cannot be proven from syntax: opaque secrets and sensitive share links in URL paths or short labels are indistinguishable from valid IDs. Callers remain responsible for supplying non-secret inputs. Existing events are not sanitized or migrated; audit and remediation require a separate authorized storage operation.
-- Public direct deletion cannot be recorded as completed cleanup under the existing BBH policy/CLI. Keep it unresolved instead of fabricating a private transition.
+- Semantic privacy cannot be proven from syntax: opaque secrets and sensitive share links in URL paths or short labels are indistinguishable from valid IDs. Callers remain responsible for supplying non-secret inputs. Recovery requires caller verification of same-object identity, not just stripping a query. Conflicting old identities, unsafe old labels, or absence of a safe replacement require separate reconciliation; old bytes and discovery reads may still expose historical secrets and require separately authorized audit/remediation.
+- Published BBH CLI `agents/public_artifacts.py` `_validate_cleanup_event` still requires `--visibility private`, and pending before deletion; it rejects direct public deletion and legacy public-pending recovery. Its `_validate_canonical_url` also rejects legacy query inputs and it exposes no recovery command. Coordinate a separately reviewed BBH follow-up to expose safe explicit recovery and support direct deletion/verification without falsely recording private visibility; align `skills/public-artifacts/SKILL.md` and its tests. No BBH repository was edited here.
 - Discovery reads skip malformed lines; the write path rejects corrupt history. Advisory locks coordinate cooperating processes on one stable filesystem inode, not uncooperative writers or separate sync replicas.
-- Existing beta consumers using nonempty `details`, mutable identity, or cleanup transitions that bypass private/pending now fail and require migration; current inspected BBH CLI passes empty `details` and its real workflow passed.
+- Existing beta consumers using nonempty `details`, mutable identity, new nonprivate pending events or query URLs now fail and require migration. The inspected BBH CLI passes empty `details`; its private → pending → deleted → verified workflow passed.
 - Provider FID raw namespace collision is outside this task and `reports.py` was not modified.
 - Independent review is required before beta integration/promotion. If it identifies compatibility or privacy gaps, add reproducing regressions and rerun the full Core and CLI suites above.
 
 ## Resume / decision gates
 
 - Resume from the implementation checkpoint and the later dossier-only tip on `fix/promo-artifact-safety`; verify both commit IDs and diff. This is a separate clone, so the integration owner must explicitly fetch the local feature ref from that clone before merging/cherry-picking; no shared refs were changed.
-- Exact next action: independent review of URL/label limitations, historical data, state transitions, partial failures and races; reconcile any findings. Target `beta`; remove this branch-local dossier on integration. Do not push or promote or activate runtime as part of this handoff.
+- Exact next action: independent review of the revised full range, particularly explicit legacy recovery attestation, history integrity, direct-deletion proof and published BBH gaps; reconcile any findings. Target `beta`; remove this branch-local dossier on integration. Do not push or promote or activate runtime as part of this handoff.
 - Integration gate: parent-run review and combined integration tests. Promotion and runtime activation are separate decisions.
