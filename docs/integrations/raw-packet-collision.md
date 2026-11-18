@@ -5,6 +5,7 @@
 - **Branch / worktree:** `fix/core-raw-collision-minimal` / `/home/ryushe/worktrees/core-raw-collision-minimal`.
 - **Base / intended target:** fetched `origin/beta` `6142defb3de7cef44887c1685e4f670072585785` / `beta`.
 - **Prior checkpoints:** `e35033c6ce59aaec171a922edfa180c19924f82c`, `d510bca6d3aa0c1cf925ad2fb331fe14068712c7`, and regression checkpoint `51c181f598a2a8046c67a6a74b117336ed10f296`.
+- **Implementation/test checkpoint:** `33b68293b9c31af6ac7082378bd96ee9cc2c3354`; the branch tip includes this later dossier-only handoff.
 - **Inspiration:** previous broader candidate on `fix/promo-fid-reserved-namespace`; not merged or modified here.
 
 ## Contract and implementation
