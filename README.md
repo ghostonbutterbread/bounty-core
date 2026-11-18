@@ -55,10 +55,10 @@ If materialization fails after the reservation, the row has
 `_atomic_import_pending` set to its packet mode. Retry `import_finding` with
 **the same candidate identity and packet mode**; it resumes the saved finding
 and returns `is_duplicate=False` on completion. A different mode is rejected.
-A successful retry after a completed import returns a duplicate. `check()`,
-`reserve_batch()`, and older consumers do not understand pending imports and
-can misclassify them as duplicates: route retries through this operation and
-reconcile pre-existing incomplete reservations manually. Never delete raw input
+A successful retry after a completed import returns a duplicate. `check()` and
+`reserve_batch()` reject matches to marked pending imports; retry through
+`import_finding` instead. Older consumers cannot complete marked pending imports;
+reconcile pre-existing unmarked incomplete reservations manually. Never delete raw input
 or a reservation automatically to resolve ambiguity. An exception may leave
 partially materialized packet/index files; reservation replacement is atomic but
 not fsynced, and this is not a multi-file crash transaction. The lock protects
