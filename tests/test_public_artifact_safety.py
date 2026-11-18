@@ -229,6 +229,7 @@ def test_rejects_labeled_credentials_without_echo_or_write(tmp_path, field, labe
 @pytest.mark.parametrize("purpose", [
     "Test password reset rendering", "Review session cookie display",
     "Test rendering [desktop] at 75%", "Compare value = expected [100%]",
+    "Compare https://example.test/posts/42?view=thread#comments",
     "Test rendering: display name",
 ])
 def test_cli_accepts_harmless_descriptions(tmp_path, purpose):
@@ -255,6 +256,8 @@ def test_cli_accepts_harmless_descriptions(tmp_path, purpose):
     "x-api-key: synthetic-example-value", "x-api-key=synthetic-example-value",
     "https://user:synthetic-example-value@example.test/posts/42",
     "https://example.test/posts/42?share=synthetic-example-value",
+    "https://example.test/posts/42?client_secret%5B%5D=synthetic-example-value",
+    "https://example.test/posts/42#access_token=synthetic-example-value",
 ])
 def test_cli_rejects_sensitive_purpose_without_echo_or_write(tmp_path, purpose):
     cli = os.environ.get("BBH_PUBLIC_ARTIFACT_CLI")

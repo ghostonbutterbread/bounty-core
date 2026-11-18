@@ -14,7 +14,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
 from .evidence import redact_event_value, utc_timestamp
@@ -323,6 +323,26 @@ _CREDENTIAL_ASSIGNMENT = re.compile(
     re.IGNORECASE,
 )
 _LABEL_URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_CREDENTIAL_URL_KEY = re.compile(
+    r"(?:^|[_\-\[])(?:password|secret|token|authorization|cookie|session|bearer|"
+    r"api[_-]?key|apikey|key|csrf|nonce|state|code|share|sig|signature)(?:$|[_\-\[])|"
+    r"^(?:api[_-]?key|apikey)$", re.IGNORECASE,
+)
+
+
+def _has_credential_url(text: str) -> bool:
+    for match in _LABEL_URL.finditer(text):
+        try:
+            url = urlsplit(match.group())
+            if "@" in url.netloc:
+                return True
+            for component in (url.query, url.fragment):
+                if any(_CREDENTIAL_URL_KEY.search(key) for key, _ in parse_qsl(component, keep_blank_values=True)):
+                    return True
+        except ValueError:
+            # urlsplit exceptions may include caller-controlled input.
+            return True
+    return False
 
 
 def _safe_text(value: str | None, name: str, *, required: bool = False) -> str | None:
@@ -331,11 +351,8 @@ def _safe_text(value: str | None, name: str, *, required: bool = False) -> str |
         return None
     # Short labels are not an archive of markup, requests, or credentials.
     # Match key/value syntax, not isolated security words in normal prose.
-    unsafe_url = any("@" in match.group().split("/", 3)[2].split("?", 1)[0].split("#", 1)[0]
-                     or "?" in match.group() or "#" in match.group()
-                     for match in _LABEL_URL.finditer(text))
-    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'():;!&\[\]%=?-]+", text)
-            or _CREDENTIAL_ASSIGNMENT.search(text) or unsafe_url
+    if (len(text) > 256 or not re.fullmatch(r"[\w .,@+/'():;!&\[\]%=?#-]+", text)
+            or _CREDENTIAL_ASSIGNMENT.search(text) or _has_credential_url(text)
             or redact_event_value(text) != text):
         raise ValueError(f"{name} must be a non-secret short label")
     return text
